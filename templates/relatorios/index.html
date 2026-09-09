@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Relatórios{% endblock %}
+{% block content %}
+<h2 class="mb-4">Relatórios (INNER JOIN)</h2>
+
+<h4>Funcionários por Cidade e Departamento</h4>
+<div class="table-responsive mb-5">
+<table class="table table-striped bg-white shadow-sm">
+    <thead class="table-dark">
+        <tr><th>#</th><th>Nome</th><th>E-mail</th><th>Cidade</th><th>Departamento</th></tr>
+    </thead>
+    <tbody>
+        {% for f in funcionarios %}
+        <tr>
+            <td>{{ f.fun_codigo }}</td>
+            <td>{{ f.fun_nome }}</td>
+            <td>{{ f.fun_email }}</td>
+            <td>{{ f.cid_nome }}/{{ f.cid_UF }}</td>
+            <td>{{ f.dep_nome }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<h4>Clientes por Cidade</h4>
+<div class="table-responsive mb-5">
+<table class="table table-striped bg-white shadow-sm">
+    <thead class="table-dark">
+        <tr><th>#</th><th>Nome</th><th>E-mail</th><th>Cidade</th></tr>
+    </thead>
+    <tbody>
+        {% for c in clientes %}
+        <tr>
+            <td>{{ c.cli_codigo }}</td>
+            <td>{{ c.cli_nome }}</td>
+            <td>{{ c.cli_email }}</td>
+            <td>{{ c.cid_nome }}/{{ c.cid_UF }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<h4>Fornecedores por Cidade</h4>
+<div class="table-responsive">
+<table class="table table-striped bg-white shadow-sm">
+    <thead class="table-dark">
+        <tr><th>#</th><th>Nome</th><th>E-mail</th><th>Cidade</th></tr>
+    </thead>
+    <tbody>
+        {% for f in fornecedores %}
+        <tr>
+            <td>{{ f.for_codigo }}</td>
+            <td>{{ f.for_nome }}</td>
+            <td>{{ f.for_email }}</td>
+            <td>{{ f.cid_nome }}/{{ f.cid_UF }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

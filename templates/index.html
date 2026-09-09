@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Início{% endblock %}
+{% block content %}
+<div class="text-center py-5">
+    <h1>Sistema de Logística</h1>
+    <p class="lead text-muted">CRUD de Cidades, Departamentos, Funcionários, Clientes e Fornecedores.</p>
+</div>
+<div class="row g-4">
+    <div class="col-md-4">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
+                <h5 class="card-title">Cidades</h5>
+                <p class="card-text">Cadastro das cidades utilizadas pelo sistema.</p>
+                <a href="{{ url_for('cidades.listar') }}" class="btn btn-outline-primary">Acessar</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
+                <h5 class="card-title">Departamentos</h5>
+                <p class="card-text">Cadastro dos departamentos da empresa.</p>
+                <a href="{{ url_for('departamentos.listar') }}" class="btn btn-outline-primary">Acessar</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
+                <h5 class="card-title">Funcionários</h5>
+                <p class="card-text">Cadastro de funcionários, vinculados a cidade e departamento.</p>
+                <a href="{{ url_for('funcionarios.listar') }}" class="btn btn-outline-primary">Acessar</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
+                <h5 class="card-title">Clientes</h5>
+                <p class="card-text">Cadastro de clientes vinculados a uma cidade.</p>
+                <a href="{{ url_for('clientes.listar') }}" class="btn btn-outline-primary">Acessar</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
+                <h5 class="card-title">Fornecedores</h5>
+                <p class="card-text">Cadastro de fornecedores vinculados a uma cidade.</p>
+                <a href="{{ url_for('fornecedores.listar') }}" class="btn btn-outline-primary">Acessar</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100 shadow-sm border-success">
+            <div class="card-body">
+                <h5 class="card-title">Relatórios (INNER JOIN)</h5>
+                <p class="card-text">Listagens combinadas exibindo nomes em vez de códigos.</p>
+                <a href="{{ url_for('relatorios.index') }}" class="btn btn-success">Acessar</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

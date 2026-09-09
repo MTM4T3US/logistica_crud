@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Cidades{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Cidades</h2>
+    <a href="{{ url_for('cidades.criar') }}" class="btn btn-primary">+ Nova Cidade</a>
+</div>
+
+<div class="table-responsive">
+<table class="table table-striped table-hover bg-white shadow-sm">
+    <thead class="table-dark">
+        <tr>
+            <th>#</th>
+            <th>Nome</th>
+            <th>UF</th>
+            <th class="text-end">Ações</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for c in cidades %}
+        <tr>
+            <td>{{ c.cid_codigo }}</td>
+            <td>{{ c.cid_nome }}</td>
+            <td>{{ c.cid_UF }}</td>
+            <td class="text-end">
+                <a href="{{ url_for('cidades.editar', cid_codigo=c.cid_codigo) }}" class="btn btn-sm btn-outline-secondary">Editar</a>
+                <form action="{{ url_for('cidades.excluir', cid_codigo=c.cid_codigo) }}" method="POST" class="d-inline"
+                      onsubmit="return confirm('Deseja realmente excluir esta cidade?');">
+                    <button type="submit" class="btn btn-sm btn-outline-danger">Excluir</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-center text-muted">Nenhuma cidade cadastrada.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

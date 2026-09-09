@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Editar' if departamento else 'Novo' }} Departamento{% endblock %}
+{% block content %}
+<h2>{{ 'Editar' if departamento else 'Novo' }} Departamento</h2>
+
+<form method="POST" class="bg-white p-4 rounded shadow-sm" style="max-width: 500px;">
+    <div class="mb-3">
+        <label class="form-label">Nome</label>
+        <input type="text" name="dep_nome" class="form-control" required
+               value="{{ departamento.dep_nome if departamento else '' }}">
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Telefone</label>
+        <input type="text" name="dep_telefone" class="form-control"
+               value="{{ departamento.dep_telefone if departamento else '' }}">
+    </div>
+    <div class="mb-3">
+        <label class="form-label">E-mail</label>
+        <input type="email" name="dep_email" class="form-control"
+               value="{{ departamento.dep_email if departamento else '' }}">
+    </div>
+    <button type="submit" class="btn btn-primary">Salvar</button>
+    <a href="{{ url_for('departamentos.listar') }}" class="btn btn-secondary">Cancelar</a>
+</form>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Editar' if cidade else 'Nova' }} Cidade{% endblock %}
+{% block content %}
+<h2>{{ 'Editar' if cidade else 'Nova' }} Cidade</h2>
+
+<form method="POST" class="bg-white p-4 rounded shadow-sm" style="max-width: 500px;">
+    <div class="mb-3">
+        <label class="form-label">Nome da cidade</label>
+        <input type="text" name="cid_nome" class="form-control" required
+               value="{{ cidade.cid_nome if cidade else '' }}">
+    </div>
+    <div class="mb-3">
+        <label class="form-label">UF</label>
+        <input type="text" name="cid_UF" class="form-control" maxlength="2" required
+               value="{{ cidade.cid_UF if cidade else '' }}">
+    </div>
+    <button type="submit" class="btn btn-primary">Salvar</button>
+    <a href="{{ url_for('cidades.listar') }}" class="btn btn-secondary">Cancelar</a>
+</form>
+{% endblock %}

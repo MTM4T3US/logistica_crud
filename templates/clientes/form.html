@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Editar' if cliente else 'Novo' }} Cliente{% endblock %}
+{% block content %}
+<h2>{{ 'Editar' if cliente else 'Novo' }} Cliente</h2>
+
+<form method="POST" class="bg-white p-4 rounded shadow-sm" style="max-width: 500px;">
+    <div class="mb-3">
+        <label class="form-label">Nome</label>
+        <input type="text" name="cli_nome" class="form-control" required
+               value="{{ cliente.cli_nome if cliente else '' }}">
+    </div>
+    <div class="mb-3">
+        <label class="form-label">E-mail</label>
+        <input type="email" name="cli_email" class="form-control"
+               value="{{ cliente.cli_email if cliente else '' }}">
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Telefone</label>
+        <input type="text" name="cli_telefone" class="form-control"
+               value="{{ cliente.cli_telefone if cliente else '' }}">
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Cidade</label>
+        <select name="cid_codigo" class="form-select" required>
+            <option value="">Selecione...</option>
+            {% for c in cidades %}
+            <option value="{{ c.cid_codigo }}"
+                {% if cliente and cliente.cid_codigo == c.cid_codigo %}selected{% endif %}>
+                {{ c.cid_nome }}/{{ c.cid_UF }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Salvar</button>
+    <a href="{{ url_for('clientes.listar') }}" class="btn btn-secondary">Cancelar</a>
+</form>
+{% endblock %}
