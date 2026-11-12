@@ -62,6 +62,7 @@ async function connect() {
 export function startBackend() {
   if (started) return
   started = true
+  restoreMute()
   audio.on({ onUtterance: (wav, mode) => send({ type: 'user_audio', wav, mode }) })
   void connect()
 }
@@ -100,6 +101,7 @@ export function refresh(force = false) {
 /** Botão de falar. Interrompe a fala do assistente (barge-in) e começa a gravar. */
 export async function toggleTalk() {
   audio.unlock()
+  if (audio.muted) return useJarvis.setState({ notice: { message: 'Microfone desligado. Use o botão ao lado para religar.', ts: Date.now() } })
   const j = useJarvis.getState()
   if (audio.micState === 'recording') return audio.stopTalk()
   const sttCloud = j.core?.voice.stt_cloud
@@ -108,11 +110,29 @@ export async function toggleTalk() {
   await audio.startTalk()
 }
 
+/** Escuta contínua: só com consentimento explícito e detector LOCAL de "Jarvis" disponível. */
 export async function setWake(on: boolean) {
   audio.unlock()
   const j = useJarvis.getState()
-  if (on && j.core?.voice.stt_cloud && !j.core?.runtime.cloud_audio_consent) return useJarvis.setState({ consentAsk: true })
+  if (on) {
+    if (audio.muted) return useJarvis.setState({ notice: { message: 'O microfone está desligado. Religue-o para usar a escuta contínua.', ts: Date.now() } })
+    if (!j.core?.voice.wake.available) return useJarvis.setState({ error: { message: `Detecção local de “Jarvis” indisponível: ${j.core?.voice.wake.reason ?? 'núcleo offline'}`, scope: 'stt', code: 'wake_unavailable', ts: Date.now() } })
+    if (!j.core?.voice.stt_active) return useJarvis.setState({ error: { message: 'Escuta contínua precisa de transcrição: instale o Whisper local (INSTALAR_RECURSOS_LOCAIS.bat) ou configure o Gemini.', scope: 'stt', code: 'stt_unavailable', ts: Date.now() } })
+    if (!j.core?.runtime.continuous_consent) return useJarvis.setState({ continuousAsk: true })
+    if (j.core?.voice.stt_cloud && !j.core?.runtime.cloud_audio_consent) return useJarvis.setState({ consentAsk: true })
+  }
   useJarvis.setState({ wake: await audio.setWake(on) })
+}
+
+export function setMuted(on: boolean) {
+  audio.setMuted(on)
+  useJarvis.setState({ wake: false, mic: on ? 'muted' : 'off' })
+  try { localStorage.setItem('jarvis.mudo', on ? '1' : '0') } catch { /* modo privado */ }
+}
+
+/** O microfone volta como o usuário deixou da última vez. */
+export function restoreMute() {
+  try { if (localStorage.getItem('jarvis.mudo') === '1') setMuted(true) } catch { /* modo privado */ }
 }
 
 /** Toca uma amostra da voz. A primeira escuta de cada combinação gasta 1 pedido de voz;

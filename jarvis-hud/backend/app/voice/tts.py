@@ -9,14 +9,17 @@ para que o timbre original do motor fique preservado e ajustável em tempo real.
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import wave
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from google.genai import types
@@ -199,6 +202,8 @@ class GeminiTTS(TTSEngine):
                     raise last from None
                 if direction and modes.get(model) != mode:
                     modes[model] = mode
+                if hasattr(self.p, "count"):
+                    self.p.count(model)
                 return model, result
         raise last
 
@@ -361,13 +366,96 @@ class LocalTTS(TTSEngine):
         return data, used
 
 
-class VoiceOutput:
-    """Escolhe o motor conforme a preferência ('auto' | 'gemini' | 'local' | 'off')."""
+class PiperTTS(TTSEngine):
+    """Voz neural local (Piper, offline e gratuita). Reserva quando o Gemini TTS não responde ou
+    está sem cota. Modelos .onnx (+ .onnx.json) em backend/models/piper — baixados pelo
+    INSTALAR_RECURSOS_LOCAIS.bat. Padrão: pt_BR-faber-medium (masculina)."""
 
-    def __init__(self, gemini: GeminiTTS | None, local: LocalTTS | None):
+    id, label, cloud = "piper", "Piper (voz neural local)", False
+    DEFAULT = "pt_BR-faber-medium"
+
+    def __init__(self, models_dir: Path, model_path: Path | None = None, loader: Any = None):
+        self.dir = Path(models_dir) / "piper"
+        self.model_path = Path(model_path) if model_path else None
+        self._loader = loader
+        self._voices: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    def _models(self) -> dict[str, Path]:
+        found: dict[str, Path] = {}
+        if self.model_path and self.model_path.exists():
+            found[self.model_path.stem] = self.model_path
+        if self.dir.is_dir():
+            for onnx in sorted(self.dir.glob("*.onnx")):
+                if Path(str(onnx) + ".json").exists():
+                    found.setdefault(onnx.stem, onnx)
+        return found
+
+    def available(self) -> tuple[bool, str]:
+        if self._loader is None:
+            try:
+                import piper  # noqa: F401
+            except Exception:
+                return False, "piper-tts não está instalado (rode INSTALAR_RECURSOS_LOCAIS.bat)."
+        if not self._models():
+            return False, f"Nenhuma voz Piper em {self.dir} (rode INSTALAR_RECURSOS_LOCAIS.bat)."
+        return True, ""
+
+    def voices(self) -> list[dict[str, str]]:
+        return [{"id": k, "label": k + (" — padrão" if k == self.DEFAULT else "")} for k in self._models()]
+
+    def _voice(self, name: str) -> Any:
+        if name not in self._voices:
+            path = self._models()[name]
+            if self._loader is not None:
+                self._voices[name] = self._loader(path)
+            else:
+                from piper import PiperVoice
+
+                self._voices[name] = PiperVoice.load(path)
+        return self._voices[name]
+
+    async def synthesize(self, text: str, voice: str | None = None, style: str | None = None, speed: float = 1.0) -> TTSResult:
+        ok, reason = self.available()
+        if not ok:
+            raise TTSError("unavailable", reason)
+        models = self._models()
+        name = voice if voice in models else (self.DEFAULT if self.DEFAULT in models else next(iter(models)))
+
+        def run() -> bytes:
+            with self._lock:
+                engine = self._voice(name)
+                try:
+                    from piper import SynthesisConfig
+
+                    cfg = SynthesisConfig(length_scale=1.0 / max(0.7, min(1.4, speed)))
+                except Exception:
+                    cfg = None
+                buf = io.BytesIO()
+                with wave.open(buf, "wb") as w:
+                    engine.synthesize_wav(text, w, syn_config=cfg)
+                return buf.getvalue()
+
+        try:
+            wav = await asyncio.to_thread(run)
+        except Exception as exc:
+            raise TTSError("local_failed", f"A voz Piper falhou ({type(exc).__name__}).") from None
+        return TTSResult(wav, float(wav_info(wav)["duration_s"]), self.id, name, False, "piper")
+
+
+class VoiceOutput:
+    """Escolhe o motor conforme a preferência ('auto' | 'gemini' | 'piper' | 'local' | 'off').
+
+    Ordem no automático: Gemini (nuvem) → Piper (neural local) → voz do sistema (SAPI/espeak)."""
+
+    ORDER = ("gemini", "piper", "local")
+
+    def __init__(self, gemini: GeminiTTS | None, local: LocalTTS | None, piper: PiperTTS | None = None):
         self.engines: dict[str, TTSEngine] = {}
         if gemini:
             self.engines["gemini"] = gemini
+        if piper:
+            self.engines["piper"] = piper
         if local:
             self.engines["local"] = local
 
@@ -377,17 +465,19 @@ class VoiceOutput:
         if preference in self.engines and self.engines[preference].available()[0]:
             return self.engines[preference]
         if preference == "auto":
-            for key in ("gemini", "local"):
+            for key in self.ORDER:
                 if key in self.engines and self.engines[key].available()[0]:
                     return self.engines[key]
         return None
 
     def fallback_for(self, engine: TTSEngine, preference: str) -> TTSEngine | None:
-        """No modo 'auto', se a nuvem falhar, a fala continua pela voz local."""
-        if preference == "auto" and engine.id == "gemini":
-            local = self.engines.get("local")
-            if local and local.available()[0]:
-                return local
+        """No modo automático, se um motor falhar, a fala continua pelo próximo da ordem."""
+        if preference != "auto" or engine.id not in self.ORDER:
+            return None
+        for key in self.ORDER[self.ORDER.index(engine.id) + 1:]:
+            nxt = self.engines.get(key)
+            if nxt and nxt.available()[0]:
+                return nxt
         return None
 
     def describe(self) -> list[dict[str, Any]]:

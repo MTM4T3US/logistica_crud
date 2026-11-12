@@ -1,0 +1,7 @@
+# Recursos locais da 0.3 (instalados pelo INSTALAR_RECURSOS_LOCAIS.bat)
+-r requirements.txt
+numpy>=1.26
+openwakeword>=0.4      # detecção local de "Jarvis" (modelo hey_jarvis incluído no pacote)
+faster-whisper>=1.0    # transcrição local (modelo baixado para backend/models/whisper)
+piper-tts>=1.2         # voz neural local (voz baixada para backend/models/piper)
+bleak>=0.22            # Bluetooth LE para a fita de LED ELK-BLEDDM

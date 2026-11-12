@@ -163,6 +163,7 @@ html, body, #root, .app { margin: 0; width: 100%; height: 100%; background: #010
 .cmd-row .icon.on { background: #2b9bff; color: #021029; }
 .cmd-row .txt { padding: 8px 14px; font-weight: 600; }
 .cmd-row .txt.stop { background: rgba(255, 130, 90, .25); color: #ffd2c2; }
+.cmd-row .icon.muted { background: rgba(255, 90, 79, .3); color: #ffb4ae; }
 .cmd-row .mic.recording { background: #ff5a4f; color: #fff; animation: pulse 1s ease-in-out infinite; }
 .cmd-row .mic.denied, .cmd-row .mic.unavailable { color: #ff9a76; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(255, 90, 79, .25); } }
@@ -203,5 +204,8 @@ html, body, #root, .app { margin: 0; width: 100%; height: 100%; background: #010
 .settings .voice .play { width: 30px; height: 26px; padding: 0; display: grid; place-items: center; }
 .settings .voice .use { padding: 3px 9px; font-size: 12px; }
 .settings .voice.on .use { background: transparent; border-color: transparent; color: #8ff0c6; opacity: 1; }
+.settings .voice.star span { color: #fff; }
+.settings .voice.star::before { content: '★'; color: #ffc46b; font-size: 11px; }
+.settings pre.perf { white-space: pre-wrap; font: 11px/1.4 Consolas, monospace; background: #06183f; border: 1px solid rgba(80,170,255,.4); border-radius: 6px; padding: 8px; max-height: 260px; overflow: auto; }
 .settings .msg { position: sticky; bottom: 0; background: #06183f; border: 1px solid rgba(80, 170, 255, .5); border-radius: 6px; padding: 7px 10px; }
 @media (prefers-reduced-motion: reduce) { .feed-scan, .bar.run span, .cmd-row .mic.recording { animation: none; } }

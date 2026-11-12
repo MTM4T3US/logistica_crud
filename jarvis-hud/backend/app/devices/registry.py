@@ -6,6 +6,7 @@ já valem para os simuladores, para que a integração real herde o mesmo contra
 """
 from __future__ import annotations
 
+import inspect
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -64,6 +65,11 @@ class SimLedStrip(Device):
             if not (len(color) == 7 and color.startswith("#") and all(c in "0123456789abcdefABCDEF" for c in color[1:])):
                 return DeviceResult(False, False, "Cor inválida: use o formato #RRGGBB.", state=self.status())
             self._s.update(on=True, color=color.lower())
+            if params.get("brightness") is not None:
+                try:
+                    self._s["brightness"] = max(0, min(100, int(params["brightness"])))
+                except (TypeError, ValueError):
+                    return DeviceResult(False, False, "Brilho inválido: informe um valor de 0 a 100.", state=self.status())
         elif action == "brightness":
             try:
                 self._s["brightness"] = max(0, min(100, int(params.get("value"))))
@@ -194,10 +200,15 @@ class SimRobot(Device):
 
 
 class DeviceRegistry:
-    def __init__(self, simulators: bool = True) -> None:
+    def __init__(self, simulators: bool = True, leds: Device | None = None, leds_off: bool = False) -> None:
+        """`leds`: driver real (ex.: ElkBleddmLeds) no lugar do simulador; `leds_off`: sem LEDs."""
         self._devices: dict[str, Device] = {}
+        if leds is not None:
+            self.register(leds)
+        elif simulators and not leds_off:
+            self.register(SimLedStrip())
         if simulators:
-            for dev in (SimLedStrip(), SimRollerBlind(), SimLock(), SimRobot()):
+            for dev in (SimRollerBlind(), SimLock(), SimRobot()):
                 self.register(dev)
 
     def register(self, device: Device) -> None:
@@ -212,12 +223,14 @@ class DeviceRegistry:
     def describe(self) -> list[dict[str, Any]]:
         return [d.describe() for d in self._devices.values()]
 
-    def command(self, device_id: str, action: str, params: dict[str, Any] | None = None) -> DeviceResult:
+    async def command(self, device_id: str, action: str, params: dict[str, Any] | None = None) -> DeviceResult:
         dev = self.get(device_id)
         if dev is None:
             return DeviceResult(False, False, f"Dispositivo '{device_id}' não está cadastrado.", simulated=False)
         if action not in dev.actions:
             return DeviceResult(False, False, f"Ação '{action}' não existe para {dev.name}.", simulated=dev.simulated, state=dev.status())
         res = dev.command(action, params or {})
+        if inspect.isawaitable(res):   # drivers reais (Bluetooth, rede) são assíncronos
+            res = await res
         res.simulated = dev.simulated
         return res

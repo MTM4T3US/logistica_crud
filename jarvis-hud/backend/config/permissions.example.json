@@ -1,17 +1,79 @@
 {
-  "_comentario": "Copie para permissions.json e edite. A IA só pode escolher os 'id' listados aqui; nunca envia comando, caminho ou argumento. 'command' é uma lista fixa (sem shell). Marque \"confirm\": true para exigir um clique no HUD antes de executar.",
+  "_comentario": "Copie para permissions.json e edite. A IA e o roteador local só podem escolher os 'id' listados aqui; nunca enviam comando, caminho ou argumento. 'command' é uma lista fixa (sem shell). \"confirm\": true exige um clique no HUD.",
   "apps": [
-    { "id": "bloco_de_notas", "name": "Bloco de Notas", "command": ["notepad.exe"] },
-    { "id": "calculadora", "name": "Calculadora", "command": ["calc.exe"] },
-    { "id": "explorador", "name": "Explorador de Arquivos", "command": ["explorer.exe"] },
-    { "id": "vscode", "name": "Visual Studio Code", "command": ["code"] },
-    { "id": "terminal", "name": "Terminal do Windows", "command": ["wt.exe"] },
-    { "id": "navegador", "name": "Microsoft Edge", "command": ["msedge.exe"] }
+    {
+      "id": "bloco_de_notas",
+      "name": "Bloco de Notas",
+      "command": [
+        "notepad.exe"
+      ]
+    },
+    {
+      "id": "calculadora",
+      "name": "Calculadora",
+      "command": [
+        "calc.exe"
+      ]
+    },
+    {
+      "id": "explorador",
+      "name": "Explorador de Arquivos",
+      "command": [
+        "explorer.exe"
+      ]
+    },
+    {
+      "id": "vscode",
+      "name": "Visual Studio Code",
+      "command": [
+        "code"
+      ]
+    },
+    {
+      "id": "terminal",
+      "name": "Terminal do Windows",
+      "command": [
+        "wt.exe"
+      ]
+    },
+    {
+      "id": "navegador",
+      "name": "Microsoft Edge",
+      "command": [
+        "msedge.exe"
+      ]
+    },
+    {
+      "id": "spotify",
+      "name": "Spotify",
+      "command": [
+        "spotify.exe"
+      ]
+    },
+    {
+      "id": "discord",
+      "name": "Discord",
+      "command": [
+        "discord.exe"
+      ]
+    }
   ],
   "folders": [
-    { "id": "documentos", "name": "Documentos", "path": "%USERPROFILE%\\Documents" },
-    { "id": "downloads", "name": "Downloads", "path": "%USERPROFILE%\\Downloads" },
-    { "id": "projetos", "name": "Projetos", "path": "%USERPROFILE%\\Documents\\Projetos" }
+    {
+      "id": "documentos",
+      "name": "Documentos",
+      "path": "%USERPROFILE%\\Documents"
+    },
+    {
+      "id": "downloads",
+      "name": "Downloads",
+      "path": "%USERPROFILE%\\Downloads"
+    },
+    {
+      "id": "projetos",
+      "name": "Projetos",
+      "path": "%USERPROFILE%\\Documents\\Projetos"
+    }
   ],
   "routines": [
     {
@@ -19,12 +81,91 @@
       "name": "Preparar ambiente de programação",
       "confirm": true,
       "steps": [
-        { "tool": "open_app", "args": { "app_id": "vscode" } },
-        { "tool": "open_app", "args": { "app_id": "terminal" } },
-        { "tool": "open_folder", "args": { "folder_id": "projetos" } }
+        {
+          "tool": "open_project",
+          "args": {
+            "project_id": "jarvis"
+          }
+        },
+        {
+          "tool": "open_app",
+          "args": {
+            "app_id": "terminal"
+          }
+        },
+        {
+          "tool": "set_lights",
+          "args": {
+            "scene_id": "trabalho"
+          }
+        }
+      ]
+    },
+    {
+      "id": "cinema",
+      "name": "Modo cinema",
+      "confirm": false,
+      "steps": [
+        {
+          "tool": "set_lights",
+          "args": {
+            "scene_id": "cinema"
+          }
+        },
+        {
+          "tool": "set_volume",
+          "args": {
+            "percent": 35
+          }
+        }
       ]
     }
   ],
   "volume_control": true,
-  "process_list": true
+  "process_list": true,
+  "projects": [
+    {
+      "id": "jarvis",
+      "name": "Projeto JARVIS",
+      "path": "%USERPROFILE%\\Documents\\Projetos\\jarvis-hud",
+      "editor": "vscode"
+    },
+    {
+      "id": "logistica",
+      "name": "Logística CRUD",
+      "path": "%USERPROFILE%\\Documents\\Projetos\\logistica_crud",
+      "editor": "vscode"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "cinema",
+      "name": "Modo cinema",
+      "on": true,
+      "color": "#1030ff",
+      "brightness": 15
+    },
+    {
+      "id": "trabalho",
+      "name": "Modo trabalho",
+      "on": true,
+      "color": "#ffffff",
+      "brightness": 90
+    },
+    {
+      "id": "jarvis",
+      "name": "Azul JARVIS",
+      "on": true,
+      "color": "#2b9bff",
+      "brightness": 70
+    },
+    {
+      "id": "apagar",
+      "name": "Apagar luzes",
+      "on": false
+    }
+  ],
+  "media_control": true,
+  "window_control": true,
+  "close_windows": false
 }

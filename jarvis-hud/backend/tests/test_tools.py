@@ -101,7 +101,7 @@ async def test_actions_fail_honestly_off_windows(settings, perms):
 
 def test_windows_controller_never_uses_a_shell(tmp_path):
     spawned, started = [], []
-    ctl = WindowsController(spawn=spawned.append, startfile=started.append, which=lambda name: f"C:/bin/{name}" if name == "notepad.exe" else None)
+    ctl = WindowsController(spawn=spawned.append, startfile=started.append, which=lambda name: f"C:/bin/{name}" if name == "notepad.exe" else None, verify_s=0)
     assert ctl.open_app(AppEntry("n", "Notas", ("notepad.exe", "--novo"))).executed and spawned == [["C:/bin/notepad.exe", "--novo"]]
     assert ctl.open_app(AppEntry("e", "Edge", ("msedge.exe",))).executed and started == ["msedge.exe"]
     missing = ctl.open_app(AppEntry("x", "Sumido", ("sumido.exe", "arg")))
@@ -114,7 +114,7 @@ def test_windows_controller_never_uses_a_shell(tmp_path):
     def boom(_):
         raise OSError(5, "Acesso negado")
 
-    assert WindowsController(spawn=boom, startfile=boom, which=lambda n: n).open_app(AppEntry("n", "Notas", ("notepad.exe",))).executed is False
+    assert WindowsController(spawn=boom, startfile=boom, which=lambda n: n, verify_s=0).open_app(AppEntry("n", "Notas", ("notepad.exe",))).executed is False
 
 
 async def test_system_readings_are_real(settings, perms):

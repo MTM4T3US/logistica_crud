@@ -205,6 +205,19 @@ class FakeConn:
         self.approve = approve
         self.confirm_texts: list[str] = []
         self.closed = False
+        self.turn: asyncio.Task | None = None
+        self.window_until = 0.0
+
+    async def cancel_turn(self) -> bool:
+        task, self.turn = self.turn, None
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass
+            return True
+        return False
 
     async def send(self, event: dict[str, Any]) -> None:
         self.events.append(event)

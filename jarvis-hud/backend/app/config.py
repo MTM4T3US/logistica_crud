@@ -60,7 +60,7 @@ class Settings:
     gemini_timeout_s: float = 30.0
     gemini_thinking_budget: int | None = None
     gemini_low_latency: bool = True  # pede raciocínio mínimo para a fala começar antes
-    gemini_probe_models: bool = True  # testa na inicialização quais modelos realmente respondem
+    gemini_probe_models: bool = False  # 0.3: não gasta cota testando modelos ao iniciar; aprende com o uso real
     gemini_probe_timeout_s: float = 8.0
     gemini_max_first_token_s: float = 1.5  # tempo-alvo até o 1º trecho ao escolher o modelo
     gemini_first_token_timeout_s: float = 12.0
@@ -69,14 +69,30 @@ class Settings:
     gemini_auto_model: bool = True
     history_turns: int = 16
     # --- Voz ---
-    tts_engine: str = "auto"  # auto | gemini | local | off
+    tts_engine: str = "auto"  # auto | gemini | piper | local | off
     tts_voice: str = "Charon"
     tts_style: str = "cinematografico"
     tts_parallel: int = 3
     tts_chunking: str = "economico"  # economico = no máximo 2 requisições de voz por resposta | frase = uma por frase
     stt_engine: str = "auto"  # auto | gemini | whisper | off
     whisper_model: str = "small"
+    whisper_device: str = "auto"      # auto | cpu | cuda
+    whisper_compute: str = "int8"
     wake_word: str = "jarvis"
+    wake_engine: str = "auto"         # auto | openwakeword | whisper | off — sempre local
+    wake_threshold: float = 0.5
+    wake_model: str | None = None     # modelo .onnx próprio de "jarvis"; padrão: hey_jarvis do openWakeWord
+    conversation_window_s: float = 8.0  # depois de uma resposta, segue ouvindo sem exigir "Jarvis"
+    piper_model: Path | None = None
+    # --- Roteador ---
+    router_mode: str = "local_first"  # local_first = comandos conhecidos não gastam Gemini | ai_first
+    # --- Modelos locais ---
+    models_dir: Path = BACKEND_DIR / "models"
+    # --- LEDs Bluetooth (ELK-BLEDDM) ---
+    leds_mode: str = "simulador"      # simulador | bluetooth | off
+    led_address: str | None = None
+    led_name_prefix: str = "ELK-BLEDDM"
+    led_brightness: str = "cor"        # cor (escurece a cor; validado) | comando (7e 04 01; não validado)
     # --- Memória ---
     memory_enabled: bool = False
     db_path: Path = BACKEND_DIR / "data" / "jarvis.sqlite3"
@@ -89,6 +105,7 @@ class Settings:
     weather_enabled: bool = True
     news_rss_url: str | None = None
     devices_simulators: bool = True
+    allow_lan: bool = False  # acesso pela rede só com autorização explícita e token forte
     permissions_path: Path = BACKEND_DIR / "config" / "permissions.json"
     location: Location = field(default_factory=Location)
 
@@ -128,7 +145,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         gemini_timeout_s=_float("GEMINI_TIMEOUT_S", 30.0),
         gemini_thinking_budget=_int("GEMINI_THINKING_BUDGET", None),
         gemini_low_latency=_bool("GEMINI_LOW_LATENCY", True),
-        gemini_probe_models=_bool("GEMINI_PROBE_MODELS", True),
+        gemini_probe_models=_bool("GEMINI_PROBE_MODELS", False),
         gemini_max_first_token_s=_float("GEMINI_MAX_FIRST_TOKEN_S", 1.5),
         gemini_first_token_timeout_s=_float("GEMINI_FIRST_TOKEN_TIMEOUT_S", 12.0),
         gemini_auto_model=_bool("GEMINI_AUTO_MODEL", True),
@@ -140,7 +157,21 @@ def load_settings(env_file: Path | None = None) -> Settings:
         tts_chunking=(os.getenv("JARVIS_TTS_CHUNKING") or "economico").strip().lower(),
         stt_engine=os.getenv("JARVIS_STT_ENGINE", "auto").strip().lower(),
         whisper_model=os.getenv("JARVIS_WHISPER_MODEL", "small").strip(),
+        whisper_device=(os.getenv("JARVIS_WHISPER_DEVICE") or "auto").strip().lower(),
+        whisper_compute=(os.getenv("JARVIS_WHISPER_COMPUTE") or "int8").strip().lower(),
         wake_word=os.getenv("JARVIS_WAKE_WORD", "jarvis").strip().lower(),
+        wake_engine=(os.getenv("JARVIS_WAKE_ENGINE") or "auto").strip().lower(),
+        wake_threshold=_float("JARVIS_WAKE_THRESHOLD", 0.5),
+        wake_model=(os.getenv("JARVIS_WAKE_MODEL") or "").strip() or None,
+        conversation_window_s=_float("JARVIS_CONVERSATION_WINDOW_S", 8.0),
+        piper_model=Path(os.getenv("JARVIS_PIPER_MODEL")) if os.getenv("JARVIS_PIPER_MODEL") else None,
+        router_mode=(os.getenv("JARVIS_ROUTER") or "local_first").strip().lower(),
+        models_dir=Path(os.getenv("JARVIS_MODELS_DIR", str(BACKEND_DIR / "models"))),
+        leds_mode=(os.getenv("JARVIS_LEDS") or "simulador").strip().lower(),
+        led_address=(os.getenv("JARVIS_LED_ADDRESS") or "").strip() or None,
+        led_name_prefix=(os.getenv("JARVIS_LED_NAME_PREFIX") or "ELK-BLEDDM").strip(),
+        led_brightness=(os.getenv("JARVIS_LED_BRILHO") or "cor").strip().lower(),
+        allow_lan=_bool("JARVIS_ALLOW_LAN", False),
         memory_enabled=_bool("JARVIS_MEMORY_ENABLED", False),
         db_path=Path(os.getenv("JARVIS_DB_PATH", str(BACKEND_DIR / "data" / "jarvis.sqlite3"))),
         host=os.getenv("JARVIS_HOST", "127.0.0.1"),

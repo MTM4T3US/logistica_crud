@@ -69,7 +69,9 @@ export function encodeWav(samples: Float32Array, rate: number): Uint8Array {
   return new Uint8Array(out.buffer)
 }
 
-type MicState = 'off' | 'starting' | 'ready' | 'recording' | 'denied' | 'unavailable'
+type MicState = 'off' | 'starting' | 'ready' | 'recording' | 'denied' | 'unavailable' | 'muted'
+/** ptt: botão · wake: escuta contínua · followup: janela após a resposta · barge: falou por cima */
+export type ListenMode = 'ptt' | 'wake' | 'followup' | 'barge'
 
 interface Segment { turn: string; seq: number; text: string; start: number; end: number; open: boolean; carry: Uint8Array | null; rate?: number }
 
@@ -78,13 +80,19 @@ interface Handlers {
   onSpeaking: (speaking: boolean) => void
   onMicState: (state: MicState) => void
   /** uma gravação terminou: WAV 16 kHz mono em base64 */
-  onUtterance: (wavB64: string, mode: 'ptt' | 'wake') => void
+  onUtterance: (wavB64: string, mode: ListenMode) => void
 }
 
 class AudioEngine {
   prefs: AudioPrefs = loadPrefs()
   micState: MicState = 'off'
   wake = false
+  /** microfone desligado pelo usuário: nada é capturado até religar */
+  muted = false
+  /** permite interromper a resposta falando (com "Jarvis") */
+  bargeIn = true
+  private followUntil = 0
+  private ducked = false
   private handlers: Handlers = { onSpeaking: () => {}, onMicState: () => {}, onUtterance: () => {} }
   private ctx: AudioContext | null = null
   private input!: GainNode
@@ -109,7 +117,7 @@ class AudioEngine {
   private recorder: AudioWorkletNode | null = null
   private micScope: AnalyserNode | null = null
   private micBuf = new Float32Array(1024)
-  private taking: 'ptt' | 'wake' | null = null
+  private taking: ListenMode | null = null
   private taken: Float32Array[] = []
   private preroll: Float32Array[] = []
   private voiced = 0
@@ -267,6 +275,18 @@ class AudioEngine {
     })
   }
 
+  /** Toca um arquivo de áudio servido pelo HUD (amostras de voz): mesma cadeia e mesmo núcleo. */
+  playUrl(url: string, text: string) {
+    this.serial(async () => {
+      const ctx = this.ensure()
+      const resp = await fetch(url)
+      if (!resp.ok) throw new Error(`amostra indisponível (${resp.status})`)
+      const buf = await ctx.decodeAudioData(await resp.arrayBuffer())
+      this.schedule(this.segment('amostra', 0, text, false), buf)
+      this.doneTurn = 'amostra'
+    })
+  }
+
   /** Há fala tocando, agendada ou ainda chegando? */
   get active(): boolean {
     const now = this.ctx?.currentTime ?? 0
@@ -309,7 +329,34 @@ class AudioEngine {
   }
 
   // ------------------------------------------------------------------ microfone
+  /** Abaixa a voz do JARVIS enquanto confere se a fala por cima é para ele. */
+  duck(on: boolean) {
+    this.ducked = on
+    if (this.ctx) this.master.gain.setTargetAtTime(on ? this.prefs.volume * 0.2 : this.prefs.volume, this.ctx.currentTime, 0.05)
+  }
+
+  /** Depois de uma resposta, segue ouvindo sem exigir "Jarvis" por alguns segundos. */
+  openWindow(seconds: number) {
+    this.followUntil = performance.now() + seconds * 1000
+  }
+
+  get inWindow(): boolean {
+    return performance.now() < this.followUntil
+  }
+
+  setMuted(on: boolean) {
+    this.muted = on
+    if (on) {
+      this.wake = false
+      this.stopMic()
+      this.setMic('muted')
+    } else if (this.micState === 'muted') {
+      this.setMic('off')
+    }
+  }
+
   async startMic(): Promise<boolean> {
+    if (this.muted) { this.setMic('muted'); return false }
     if (this.stream) return true
     if (!navigator.mediaDevices?.getUserMedia || typeof AudioWorkletNode === 'undefined') {
       this.setMic('unavailable')
@@ -341,6 +388,7 @@ class AudioEngine {
   }
 
   stopMic() {
+    if (this.ducked) this.duck(false)
     this.taking = null
     this.taken = []
     this.stream?.getTracks().forEach((t) => t.stop())
@@ -373,10 +421,10 @@ class AudioEngine {
     return this.wake
   }
 
-  private begin(mode: 'ptt' | 'wake') {
+  private begin(mode: ListenMode) {
     this.taking = mode
-    this.taken = mode === 'wake' ? [...this.preroll] : []
-    this.voiced = 0; this.quiet = 0; this.heard = mode === 'wake'
+    this.taken = mode === 'ptt' ? [] : [...this.preroll]
+    this.voiced = 0; this.quiet = 0; this.heard = mode !== 'ptt'
     this.setMic('recording')
   }
 
@@ -387,17 +435,24 @@ class AudioEngine {
     if (!this.taking) {
       this.preroll.push(block)
       if (this.preroll.length > 8) this.preroll.shift()
-      if (!voice) this.noise = this.noise * 0.97 + level * 0.03
-      // meio-duplex: não escuta enquanto o próprio assistente fala (nem logo depois)
-      const blocked = liveAudio.speaking || performance.now() < this.holdUntil
+      if (!voice && !liveAudio.speaking) this.noise = this.noise * 0.97 + level * 0.03
+      if (liveAudio.speaking) {
+        // falando por cima: limiar bem mais alto (o eco residual da própria voz não pode disparar) e
+        // ~260 ms de voz contínua; a interrupção só acontece se o núcleo ouvir "Jarvis" localmente
+        const strong = level > Math.max(0.035, this.noise * 7)
+        this.voiced = strong && this.wake && this.bargeIn ? this.voiced + 1 : 0
+        if (this.voiced >= 6) { this.duck(true); this.begin('barge') }
+        return
+      }
+      const blocked = performance.now() < this.holdUntil
       this.voiced = voice && !blocked ? this.voiced + 1 : 0
-      if (this.wake && this.voiced >= 3) this.begin('wake')
+      if (this.wake && this.voiced >= 3) this.begin(this.inWindow ? 'followup' : 'wake')
       return
     }
     this.taken.push(block)
     if (voice) { this.heard = true; this.quiet = 0 } else this.quiet++
     const seconds = (this.taken.length * block.length) / (this.ctx?.sampleRate || 48000)
-    const silenceLimit = this.taking === 'wake' ? 20 : 26 // blocos de ~43 ms
+    const silenceLimit = this.taking === 'ptt' ? 26 : 20 // blocos de ~43 ms
     if ((this.heard && this.quiet >= silenceLimit) || seconds > 20 || (!this.heard && seconds > 6)) void this.end()
   }
 
@@ -410,6 +465,7 @@ class AudioEngine {
     if (this.stream) this.setMic('ready')
     if (!mode || !this.ctx) return
     if (!this.wake) this.stopMic() // sem escuta contínua, o microfone é liberado ao fim de cada fala
+    if (mode === 'barge' && !this.heard) this.duck(false)
     const total = blocks.reduce((n, b) => n + b.length, 0)
     const rate = this.ctx.sampleRate
     if (!this.heard || total < rate * 0.35) return

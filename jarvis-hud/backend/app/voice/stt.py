@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import threading
+from pathlib import Path
 import re
 import unicodedata
 from abc import ABC, abstractmethod
@@ -102,6 +104,8 @@ class GeminiSTT(STTEngine):
                     self.p.client.aio.models.generate_content(model=model, contents=contents, config=types.GenerateContentConfig(temperature=0.0)),
                     timeout=self.p.settings.gemini_timeout_s,
                 )
+                if hasattr(self.p, "count"):
+                    self.p.count(model)
                 return STTResult(clean_transcript(response_text(resp)), self.id, True)
             except Exception as exc:
                 err = map_gemini_error(exc)
@@ -114,26 +118,58 @@ class GeminiSTT(STTEngine):
 
 
 class WhisperSTT(STTEngine):
+    """Transcrição 100% local com faster-whisper. O modelo fica em backend/models/whisper
+    (baixado pelo INSTALAR_RECURSOS_LOCAIS.bat ou no 1º uso). Tenta a GPU (CUDA) quando pedido e
+    volta para a CPU (int8) se as bibliotecas da NVIDIA não estiverem presentes."""
+
     id, label, cloud = "whisper", "Whisper local (offline)", False
 
-    def __init__(self, model_size: str = "small"):
-        self.model_size = model_size
+    def __init__(self, model_size: str = "small", models_dir: Path | None = None, device: str = "auto", compute: str = "int8", factory: Any = None):
+        self.model_size, self.device, self.compute = model_size, device, compute
+        self.root = Path(models_dir) / "whisper" if models_dir else None
+        self._factory = factory
         self._model: Any = None
+        self.loaded_on: str | None = None
+        self._lock = threading.Lock()
 
     def available(self) -> tuple[bool, str]:
+        if self._factory is not None:
+            return True, ""
         try:
             import faster_whisper  # noqa: F401
         except Exception:
-            return False, "faster-whisper não está instalado (pip install faster-whisper)."
+            return False, "faster-whisper não está instalado (rode INSTALAR_RECURSOS_LOCAIS.bat)."
         return True, ""
 
-    def _transcribe_blocking(self, wav: bytes) -> str:
-        from faster_whisper import WhisperModel
+    def _load(self) -> Any:
+        if self._model is not None:
+            return self._model
+        make = self._factory
+        if make is None:
+            from faster_whisper import WhisperModel
 
-        if self._model is None:
-            self._model = WhisperModel(self.model_size, device="auto", compute_type="auto")
-        segments, _ = self._model.transcribe(io.BytesIO(wav), language="pt", vad_filter=True)
-        return " ".join(s.text.strip() for s in segments)
+            def make(size: str, device: str, compute: str) -> Any:
+                return WhisperModel(size, device=device, compute_type=compute, download_root=str(self.root) if self.root else None)
+
+        attempts = [("cuda", "float16"), ("cpu", self.compute)] if self.device in ("auto", "cuda") else [("cpu", self.compute)]
+        last: Exception | None = None
+        for device, compute in attempts:
+            try:
+                self._model = make(self.model_size, device, compute)
+                self.loaded_on = f"{device}/{compute}"
+                return self._model
+            except Exception as exc:  # sem CUDA/cuDNN: segue para a CPU
+                last = exc
+        raise last or RuntimeError("faster-whisper não carregou")
+
+    def _transcribe_blocking(self, wav: bytes) -> str:
+        with self._lock:
+            model = self._load()
+            segments, _ = model.transcribe(
+                io.BytesIO(wav), language="pt", beam_size=1, vad_filter=True, condition_on_previous_text=False,
+                initial_prompt="Jarvis, assistente pessoal.",
+            )
+            return " ".join(s.text.strip() for s in segments)
 
     async def transcribe(self, wav: bytes, language: str = "pt-BR") -> STTResult:
         ok, reason = self.available()
@@ -142,7 +178,7 @@ class WhisperSTT(STTEngine):
         try:
             text = await asyncio.to_thread(self._transcribe_blocking, wav)
         except Exception as exc:
-            raise STTError("local_failed", f"A transcrição local falhou ({type(exc).__name__}).") from None
+            raise STTError("local_failed", f"A transcrição local falhou ({type(exc).__name__}: {str(exc)[:120]}).") from None
         return STTResult(clean_transcript(text), self.id, False)
 
 
@@ -160,7 +196,8 @@ class VoiceInput:
         if preference in self.engines and self.engines[preference].available()[0]:
             return self.engines[preference]
         if preference == "auto":
-            for key in ("gemini", "whisper"):
+            # local primeiro: privacidade e nenhuma cota gasta
+            for key in ("whisper", "gemini"):
                 if key in self.engines and self.engines[key].available()[0]:
                     return self.engines[key]
         return None

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import binascii
 import contextlib
 from contextlib import asynccontextmanager
@@ -112,6 +113,23 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
         await asyncio.to_thread(core.memory.clear_facts)
         return {"ok": True}
 
+    @app.post("/api/devices/{device_id}/{action}")
+    async def device_action(device_id: str, action: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Ações de manutenção vindas do painel (procurar, conectar, desconectar, estado).
+        Comandos de luz pela IA/roteador passam pelas ferramentas, não por aqui."""
+        if action not in ("scan", "connect", "disconnect", "status"):
+            raise HTTPException(status_code=400, detail={"message": "Ação não permitida por esta rota."})
+        res = await core.devices.command(device_id, action, body or {})
+        return {"ok": res.ok, "executed": res.executed, "simulated": res.simulated, "message": res.message, "state": res.state, "devices": core.devices.describe()}
+
+    @app.post("/api/perf")
+    async def perf_report(body: dict[str, Any]) -> dict[str, Any]:
+        """Relatório de desempenho: métricas do HUD (FPS medidos no navegador) + leituras reais do sistema."""
+        from .services.perf import write_report
+
+        path, text = await asyncio.to_thread(write_report, settings.db_path.parent, body, core.monitor)
+        return {"path": str(path), "markdown": text}
+
     @app.post("/api/voice/sample")
     async def voice_sample(body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -148,8 +166,15 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
                     except (binascii.Error, ValueError):
                         await conn.send({"type": "error", "scope": "stt", "code": "bad_audio", "message": "Áudio corrompido."})
                         continue
-                    await conn.cancel_turn()
-                    conn.turn = asyncio.create_task(core.handle_audio(conn, wav, "wake" if msg.get("mode") == "wake" else "ptt"))
+                    mode = msg.get("mode") if msg.get("mode") in ("ptt", "wake", "followup", "barge") else "ptt"
+                    if mode in ("wake", "barge"):
+                        # só interrompe a fala atual se o detector local confirmar "Jarvis"
+                        if conn.listen is not None and not conn.listen.done():
+                            conn.listen.cancel()
+                        conn.listen = asyncio.create_task(core.handle_audio(conn, wav, mode))
+                    else:
+                        await conn.cancel_turn()
+                        conn.turn = asyncio.create_task(core.handle_audio(conn, wav, mode))
                 elif kind == "interrupt":
                     if await conn.cancel_turn():
                         await conn.send({"type": "phase", "phase": "idle"})
@@ -195,10 +220,31 @@ async def _feed(conn: Connection, core: Assistant) -> None:
         weather.cancel()
 
 
+LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+def check_exposure(settings: Settings) -> str | None:
+    """O núcleo só escuta fora do próprio computador com autorização explícita e token forte."""
+    if settings.host in LOOPBACK:
+        return None
+    if not settings.allow_lan:
+        return (f"Recusado: JARVIS_HOST={settings.host} exporia o núcleo na rede. Para permitir, defina JARVIS_ALLOW_LAN=true, "
+                "um JARVIS_LOCAL_TOKEN com 24+ caracteres e JARVIS_ALLOWED_ORIGINS com o endereço do HUD.")
+    if len(os.getenv("JARVIS_LOCAL_TOKEN", "").strip()) < 24:
+        return "Recusado: para acesso pela rede, JARVIS_LOCAL_TOKEN precisa ter pelo menos 24 caracteres."
+    if not settings.allowed_origins:
+        return "Recusado: para acesso pela rede, defina JARVIS_ALLOWED_ORIGINS com o endereço exato do HUD."
+    return None
+
+
 def run() -> None:
     import uvicorn
 
     settings = load_settings()
+    problem = check_exposure(settings)
+    if problem:
+        print(problem)
+        raise SystemExit(2)
     print(f"JARVIS Core {VERSION} em http://{settings.host}:{settings.port}  |  IA: {'Gemini (' + settings.gemini_model + ')' if settings.ai_configured else 'não configurada (modo local)'}")
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="warning")
 

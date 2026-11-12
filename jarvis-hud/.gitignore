@@ -13,3 +13,4 @@ backend/samples/
 backend/config/permissions.json
 backend/**/__pycache__/
 backend/.pytest_cache/
+backend/models/

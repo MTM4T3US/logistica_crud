@@ -18,11 +18,20 @@ export interface CoreState {
   ai: {
     configured: boolean; mode: 'ai' | 'local'; provider: string; model: string; note?: string; last_error?: { code: string; message?: string } | null
     tts_model?: string; stt_model?: string; chat_models?: string[]; tts_models?: string[]; probes?: Record<string, Probe>; limited?: string[]; thinking?: string | null; resolved?: boolean
+    usage?: { day: string; models: Record<string, { today: number; day_limit: number | null; minute_limit: number | null; exhausted: boolean }> }
+    connection?: { state: string; at: number | null; detail: string }
   }
   timings?: Timings | null
   location: { city: string; state: string; state_code: string; country: string; timezone: string; language: string }
-  runtime: { tts_engine: string; tts_voice_gemini: string; tts_voice_local: string; tts_style: string; stt_engine: string; speak: boolean; memory_enabled: boolean; cloud_audio_consent: boolean; user_title: string; chat_model: string; tts_model: string; tts_speed: number }
-  voice: { tts_engines: EngineInfo[]; stt_engines: EngineInfo[]; tts_active: string | null; tts_cloud: boolean; stt_active: string | null; stt_cloud: boolean; wake_word: string }
+  runtime: {
+    tts_engine: string; tts_voice_gemini: string; tts_voice_local: string; tts_voice_piper: string; tts_style: string; stt_engine: string; speak: boolean
+    memory_enabled: boolean; cloud_audio_consent: boolean; user_title: string; chat_model: string; tts_model: string; tts_speed: number
+    router_mode: string; continuous_consent: boolean; barge_in: boolean
+  }
+  voice: {
+    tts_engines: EngineInfo[]; stt_engines: EngineInfo[]; tts_active: string | null; tts_cloud: boolean; stt_active: string | null; stt_cloud: boolean; wake_word: string
+    wake: { id: string | null; label?: string; available: boolean; reason: string; local: boolean }; conversation_window_s: number
+  }
   permissions: { source: string; apps: { id: string; name: string }[]; folders: { id: string; name: string }[]; routines: { id: string; name: string }[] }
   system_actions: { platform: string; open_app: boolean; open_folder: boolean; volume: boolean }
   devices: DeviceData[]
@@ -51,6 +60,8 @@ interface JarvisState {
   confirm: { id: string; text: string } | null
   mic: MicState
   wake: boolean
+  /** pedido de consentimento para a escuta contínua */
+  continuousAsk: boolean
   consentAsk: boolean
   settingsOpen: boolean
   set: (patch: Partial<JarvisState>) => void
@@ -58,7 +69,7 @@ interface JarvisState {
 
 export const useJarvis = create<JarvisState>((set) => ({
   conn: 'connecting', core: null, busy: false, activity: '', lines: [], tools: [], weather: null, system: null, devices: [], news: null,
-  error: null, notice: null, confirm: null, mic: 'off', wake: false, consentAsk: false, settingsOpen: false,
+  error: null, notice: null, confirm: null, mic: 'off', wake: false, consentAsk: false, continuousAsk: false, settingsOpen: false,
   set: (patch) => set(patch),
 }))
 
@@ -87,7 +98,13 @@ function settle() {
 }
 
 audio.on({
-  onSpeaking: (speaking) => (speaking ? show('speaking') : settle()),
+  onSpeaking: (speaking) => {
+    if (speaking) return show('speaking')
+    // fim da resposta: na escuta contínua, abre a janela para continuar a conversa sem "Jarvis"
+    const win = J().core?.voice.conversation_window_s ?? 8
+    if (audio.wake) audio.openWindow(win)
+    settle()
+  },
   onMicState: (mic) => {
     useJarvis.setState({ mic })
     if (mic === 'recording') show('listening')
@@ -110,6 +127,7 @@ export function handleEvent(ev: Record<string, any>) {
     case 'hello':
     case 'state':
       useJarvis.setState({ core: ev.state, devices: ev.state.devices, conn: 'online' })
+      audio.bargeIn = ev.state.runtime?.barge_in ?? true
       break
     case 'phase':
       if (ev.phase === 'thinking' || ev.phase === 'transcribing') {
@@ -175,7 +193,13 @@ export function handleEvent(ev: Record<string, any>) {
       useJarvis.setState({ notice: { message: 'Não ouvi nenhuma fala. Tente de novo ou digite o comando.', ts: now } })
       break
     case 'wake_ignored':
-      break // fala sem a palavra de ativação: descartada em silêncio
+      // fala sem "Jarvis": descartada no próprio computador; se era por cima da resposta, a voz volta
+      if (ev.mode === 'barge') audio.duck(false)
+      break
+    case 'barge_accept':
+      audio.stop()
+      audio.duck(false)
+      break
     case 'confirm_request':
       useJarvis.setState({ confirm: { id: ev.id, text: ev.text } })
       break

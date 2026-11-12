@@ -330,6 +330,7 @@ class ByModel:
 def probing(behaviors: dict[str, Any], **kw: Any) -> tuple[GeminiProvider, ByModel]:
     models = ByModel(behaviors)
     kw.setdefault("db_path", Path(":memory:"))
+    kw.setdefault("gemini_probe_models", True)
     settings = Settings(gemini_api_key="teste", gemini_model="auto", gemini_timeout_s=1.0, gemini_first_token_timeout_s=1.0, gemini_probe_timeout_s=0.25, **kw)
     return GeminiProvider(settings, client=SimpleNamespace(aio=SimpleNamespace(models=models))), models
 

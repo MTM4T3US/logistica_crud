@@ -208,7 +208,8 @@ def test_engine_selection_and_fallback():
     assert only_local.resolve("auto") is local and only_local.resolve("gemini") is None
     vin = VoiceInput(None, None)
     vin.engines = {"whisper": FakeSTT(engine_id="whisper"), "gemini": FakeSTT(engine_id="gemini", cloud=True)}
-    assert vin.resolve("auto").id == "gemini" and vin.resolve("whisper").id == "whisper" and vin.resolve("off") is None
+    # local primeiro: privacidade e nenhuma cota gasta
+    assert vin.resolve("auto").id == "whisper" and vin.resolve("gemini").id == "gemini" and vin.resolve("off") is None
     assert VoiceInput(None, None).resolve("auto") is None
 
 

@@ -180,18 +180,18 @@ async def test_news_is_off_without_source_and_parses_feeds():
 
 
 # ---------------------------------------------------------------- dispositivos (simuladores)
-def test_devices_are_simulated_and_lock_never_unlocks():
+async def test_devices_are_simulated_and_lock_never_unlocks():
     reg = DeviceRegistry()
     assert sorted(reg.ids()) == ["fechadura", "leds", "persiana", "robo"]
     assert all(d["simulated"] and d["connected"] is False for d in reg.describe())
-    on = reg.command("leds", "color", {"color": "#FF8800"})
+    on = await reg.command("leds", "color", {"color": "#FF8800"})
     assert on.ok and on.simulated and on.state == {"on": True, "color": "#ff8800", "brightness": 80} and "SIMULADOR" in on.message
-    assert reg.command("leds", "color", {"color": "vermelho"}).executed is False
-    assert reg.command("persiana", "position", {"value": 250}).state["position"] == 100
-    unlock = reg.command("fechadura", "unlock")
+    assert (await reg.command("leds", "color", {"color": "vermelho"})).executed is False
+    assert (await reg.command("persiana", "position", {"value": 250})).state["position"] == 100
+    unlock = await reg.command("fechadura", "unlock")
     assert unlock.ok is False and unlock.executed is False and reg.get("fechadura").status()["locked"] is True and "autenticação forte" in unlock.message
     assert reg.get("fechadura").events[-1] == {**reg.get("fechadura").events[-1], "action": "unlock", "allowed": False}
-    assert reg.command("leds", "explodir").executed is False and reg.command("torradeira", "on").ok is False
+    assert (await reg.command("leds", "explodir")).executed is False and (await reg.command("torradeira", "on")).ok is False
     assert DeviceRegistry(simulators=False).ids() == []
 
 

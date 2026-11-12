@@ -1,4 +1,4 @@
-# JARVIS OS 0.2.1
+# JARVIS OS 0.3
 
 Assistente pessoal com interface holográfica: um HUD em React + Three.js e um núcleo local em
 Python (FastAPI) que conversa pelo Google Gemini, fala, ouve e consulta dados reais do
@@ -6,23 +6,25 @@ computador e de Itumbiara-GO.
 
 Esta pasta é independente do CRUD de logística que está na raiz do repositório.
 
-> **Estado:** a integração com o Gemini foi validada com a API real (conversa, ferramentas, voz
-> em streaming, transcrição e palavra "Jarvis"). **Ainda não foi executada em Windows** nem com
-> um microfone físico. Detalhes, latências medidas e cotas em
-> [`docs/RELATORIO_0.2.1.md`](docs/RELATORIO_0.2.1.md).
+> **Estado (0.3):** escrita e testada em Linux na nuvem (157 testes, navegador 14/14, detecção local
+> de "Jarvis" com fala real). **Ainda não foi executada no Windows**, com microfone físico, nem com a
+> fita de LED real. O roteiro para testar no seu PC está em
+> [`docs/PROMPT_TESTE_WINDOWS.md`](docs/PROMPT_TESTE_WINDOWS.md); status por item em
+> [`docs/RELATORIO_0.3.md`](docs/RELATORIO_0.3.md); instalação em [`docs/WINDOWS_0.3.md`](docs/WINDOWS_0.3.md).
 
 ## O que é real e o que é simulado
 
 | Recurso | Situação |
 |---|---|
 | Cena holográfica (núcleo, base, feixe, arco, planeta) | Real — igual à 0.1, agora movida por áudio de verdade. |
-| Conversa com IA | Gemini, quando há chave em `backend/.env`. Sem chave: modo local com poucos comandos fixos (não é IA). |
+| Conversa com IA | Gemini, quando há chave em `backend/.env`. Comandos conhecidos passam pelo **roteador local** e não gastam cota. Sem chave/cota/internet: só comandos locais (não é IA). |
 | Voz do assistente | Gemini TTS em streaming (nuvem; escolha entre ~30 vozes e 4 interpretações) ou voz local do sistema. |
-| Fala do usuário | Microfone → transcrição pelo Gemini (nuvem, com consentimento) ou Whisper local opcional. |
+| Fala do usuário | Botão de falar ou escuta contínua: "Jarvis" detectado **no PC** (openWakeWord); transcrição local (Whisper) ou Gemini com consentimento. |
 | Hora, clima | Reais: fuso `America/Sao_Paulo`; clima do Open-Meteo. |
 | CPU, RAM, disco, processos | Reais (psutil). |
-| Abrir apps/pastas, volume, rotinas | Reais no Windows, só para itens de `backend/config/permissions.json`. |
-| LEDs, persiana, fechadura, robô | **Simuladores.** Nenhum hardware é acionado. |
+| Abrir apps/pastas/projetos, volume, mídia, janelas, rotinas | Windows, só para itens de `backend/config/permissions.json` (não testado em Windows ainda). |
+| LEDs | Driver real ELK-BLEDDM por Bluetooth (`JARVIS_LEDS=bluetooth`) ou simulador (padrão). Não testado com a fita ainda. |
+| Persiana, fechadura, robô | **Simuladores.** Nenhum hardware é acionado. |
 | Reconhecimento facial | **Demonstração visual.** Nenhuma câmera é usada. |
 | Mapa 3D | **Cidade fictícia de demonstração**, identificada na tela. |
 | Notícias | Desligadas até você configurar um feed RSS. |
@@ -112,7 +114,7 @@ dedicada em *Configurações → Sistema → Tela → Elementos gráficos* para 
 ## Testes
 
 ```powershell
-# backend — 117 testes, sem rede nem chave
+# backend — 157 testes, sem rede nem chave
 backend\.venv\Scripts\python -m pip install -r backend\requirements-dev.txt
 cd backend; .venv\Scripts\python -m pytest; cd ..
 
@@ -132,7 +134,7 @@ VALIDAR_GEMINI.bat
 ```
 backend/app/            núcleo: main, assistant, ai/, voice/, system/, services/, devices/, memory/, security/
 backend/config/         permissions.example.json (lista de apps, pastas e rotinas autorizados)
-backend/scripts/        validar_gemini.py (validação real da IA, vozes, transcrição e latência)
+backend/scripts/        validar_gemini.py · diagnostico.py · baixar_modelos.py · teste_led.py
 backend/tests/          testes automatizados
 src/scene/              cena 3D (Core, Platform, Space, Canopy, City, FaceScan, Director)
 src/core/               audio.ts (reprodução, microfone, níveis) · backend.ts (sessão e WebSocket)
@@ -145,6 +147,8 @@ evidence/               capturas da 0.1, 0.2 e 0.2.1; amostras de voz em evidenc
 
 ## Documentação
 
+- [`docs/RELATORIO_0.3.md`](docs/RELATORIO_0.3.md) — o que a 0.3 fez, status por item (real, só API, dublê, simulado, pendente).
+- [`docs/WINDOWS_0.3.md`](docs/WINDOWS_0.3.md) — instalação e uso no Windows; [`docs/PROMPT_TESTE_WINDOWS.md`](docs/PROMPT_TESTE_WINDOWS.md) — roteiro de teste no PC.
 - [`docs/RELATORIO_0.2.1.md`](docs/RELATORIO_0.2.1.md) — testes reais, problemas corrigidos, cotas, pendências da 0.3.
 - [`docs/RELATORIO_0.2.md`](docs/RELATORIO_0.2.md) — auditoria e testes da versão anterior.
 - [`docs/ARQUITETURA_JARVIS_CORE.md`](docs/ARQUITETURA_JARVIS_CORE.md) — módulos, protocolo e segurança.

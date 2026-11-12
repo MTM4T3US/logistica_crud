@@ -1,0 +1,16 @@
+{
+  "_sobre": "Amostras REAIS geradas pelo Gemini TTS na validação de 12/11/2026 (versão 0.2.1). Tocar não gasta cota. Frase: 'Bom dia, senhor. Todos os sistemas estão operacionais. Em que posso ajudá-lo?'",
+  "amostras": [
+    { "arquivo": "gemini-Algieba.mp3", "voz": "Algieba", "estilo": "cinematografico", "modelo": "gemini-3.8-flash-tts", "tom_hz": 102, "destaque": true, "nota": "a mais grave medida" },
+    { "arquivo": "gemini-Charon.mp3", "voz": "Charon", "estilo": "cinematografico", "modelo": "gemini-3.8-flash-tts", "tom_hz": 128, "destaque": true },
+    { "arquivo": "gemini-Schedar.mp3", "voz": "Schedar", "estilo": "cinematografico", "modelo": "gemini-3.8-flash-tts", "tom_hz": 128, "destaque": true },
+    { "arquivo": "gemini-Charon-sobrio.mp3", "voz": "Charon", "estilo": "sobrio", "modelo": "gemini-3.8-flash-tts", "tom_hz": 103, "destaque": true, "nota": "interpretação sóbria" },
+    { "arquivo": "gemini-Charon-caloroso.mp3", "voz": "Charon", "estilo": "caloroso", "modelo": "gemini-3.8-flash-tts", "tom_hz": 123 },
+    { "arquivo": "gemini-Charon-neutro.mp3", "voz": "Charon", "estilo": "neutro", "modelo": "gemini-3.8-flash-tts", "tom_hz": 138 },
+    { "arquivo": "gemini-Algenib.mp3", "voz": "Algenib", "estilo": "cinematografico", "modelo": "gemini-3.8-flash-tts", "tom_hz": 130 },
+    { "arquivo": "gemini-Iapetus.mp3", "voz": "Iapetus", "estilo": "cinematografico", "modelo": "gemini-3.8-flash-tts", "tom_hz": 132 },
+    { "arquivo": "gemini-Orus.mp3", "voz": "Orus", "estilo": "cinematografico", "modelo": "gemini-3.8-flash-tts", "tom_hz": 141 },
+    { "arquivo": "gemini-3.1-tts-streaming-Charon.mp3", "voz": "Charon", "estilo": "cinematografico", "modelo": "gemini-3.1-flash-tts-preview", "tom_hz": 183, "nota": "mesmo nome, outro modelo" },
+    { "arquivo": "local-espeak-pt-br.mp3", "voz": null, "estilo": null, "modelo": "espeak-ng (Linux)", "tom_hz": 93, "nota": "voz local robótica, só referência" }
+  ]
+}

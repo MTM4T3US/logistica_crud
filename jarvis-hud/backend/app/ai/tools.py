@@ -116,6 +116,23 @@ class ToolRegistry:
             specs.append(ToolSpec(
                 "open_folder", "Abrir pasta", f"Abre no explorador uma pasta pré-aprovada. Identificadores: {names}.",
                 _obj({"folder_id": {"type": "string", "enum": list(p.folders)}}, ["folder_id"]), ActionClass.SAFE, self._open_folder))
+        if p.projects:
+            names = "; ".join(f"{x.id} = {x.name}" for x in p.projects.values())
+            specs.append(ToolSpec(
+                "open_project", "Abrir projeto", f"Abre um projeto cadastrado no editor configurado. Identificadores: {names}.",
+                _obj({"project_id": {"type": "string", "enum": list(p.projects)}}, ["project_id"]), ActionClass.SAFE, self._open_project))
+        if p.media_control:
+            specs.append(ToolSpec(
+                "media_control", "Mídia", "Envia uma tecla multimídia ao Windows (tocar/pausar, próxima, anterior, parar, mudo). O Windows não confirma se um player reagiu.",
+                _obj({"action": {"type": "string", "enum": ["play_pause", "next", "previous", "stop", "mute"]}}, ["action"]), ActionClass.SAFE, self._media))
+        if p.window_control:
+            actions = ["list", "focus", "minimize", "maximize", "restore", "snap_left", "snap_right", "arrange", "minimize_all"] + (["close"] if p.close_windows else [])
+            specs.append(ToolSpec(
+                "window_control", "Janelas",
+                "Organiza janelas abertas. `query` é parte do título da janela (ex.: 'chrome', 'visual studio code'); "
+                "`arrange` coloca duas janelas lado a lado (query e other)." + (" `close` pede para fechar e exige confirmação." if p.close_windows else ""),
+                _obj({"action": {"type": "string", "enum": actions}, "query": {"type": "string", "maxLength": 80}, "other": {"type": "string", "maxLength": 80}}, ["action"]),
+                ActionClass.SAFE, self._windows))
         if p.routines:
             names = "; ".join(f"{r.id} = {r.name}" for r in p.routines.values())
             specs.append(ToolSpec(
@@ -124,10 +141,24 @@ class ToolRegistry:
         if p.volume_control:
             specs.append(ToolSpec("get_volume", "Ler volume", "Lê o volume principal do computador.", _obj(), ActionClass.READ, self._get_volume))
             specs.append(ToolSpec(
+                "change_volume", "Mudar volume", "Aumenta (positivo) ou diminui (negativo) o volume em pontos percentuais.",
+                _obj({"delta": {"type": "integer", "minimum": -50, "maximum": 50}}, ["delta"]), ActionClass.SAFE, self._change_volume))
+            specs.append(ToolSpec(
                 "set_volume", "Ajustar volume", "Define o volume principal (0 a 100) e/ou ativa/desativa o mudo.",
                 _obj({"percent": {"type": "integer", "minimum": 0, "maximum": 100}, "mute": {"type": "boolean"}}), ActionClass.SAFE, self._set_volume))
+        leds = self.devices.get("leds")
+        if leds is not None:
+            scenes = "; ".join(f"{c.id} = {c.name}" for c in p.scenes.values())
+            real = "a fita REAL por Bluetooth (ela não confirma o recebimento)" if not leds.simulated else "o SIMULADOR (nenhuma luz real)"
+            specs.append(ToolSpec(
+                "set_lights", "Luzes",
+                f"Controla as luzes de LED: {real}. Use scene_id para uma cena cadastrada ({scenes or 'nenhuma'}), "
+                "ou power ('on'/'off'), color (#RRGGBB) e/ou brightness (0-100).",
+                _obj({"scene_id": {"type": "string", "enum": list(p.scenes) or ["_"]}, "power": {"type": "string", "enum": ["on", "off"]},
+                      "color": {"type": "string", "maxLength": 7}, "brightness": {"type": "integer", "minimum": 0, "maximum": 100}}),
+                ActionClass.SAFE, self._set_lights))
         if self.devices.ids():
-            specs.append(ToolSpec("list_devices", "Dispositivos", "Estado dos dispositivos cadastrados (nesta versão, todos são simuladores).", _obj(), ActionClass.READ, self._list_devices))
+            specs.append(ToolSpec("list_devices", "Dispositivos", "Estado dos dispositivos cadastrados, indicando quais são reais e quais são simuladores.", _obj(), ActionClass.READ, self._list_devices))
             specs.append(ToolSpec(
                 "control_device", "Comandar dispositivo",
                 "Envia um comando a um dispositivo. Ações — leds: on, off, color (color=#RRGGBB), brightness (value 0-100); "
@@ -216,7 +247,10 @@ class ToolRegistry:
 
     async def _list_devices(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
         devs = self.devices.describe()
-        out = ToolOutcome(run.call, True, True, f"{len(devs)} dispositivos cadastrados (todos simuladores).", data={"devices": devs})
+        real = [d["name"] for d in devs if not d["simulated"]]
+        sims = [d["name"] for d in devs if d["simulated"]]
+        text = f"{len(devs)} dispositivos: " + (f"reais — {', '.join(real)}; " if real else "") + (f"simuladores — {', '.join(sims)}." if sims else "")
+        out = ToolOutcome(run.call, True, True, text.rstrip("; ") , data={"devices": devs})
         out.simulated = any(d["simulated"] for d in devs)
         return out
 
@@ -259,9 +293,70 @@ class ToolRegistry:
         params = {k: args[k] for k in ("value", "color", "direction") if k in args}
         if args["action"] == "move" and "value" in params:
             params["speed"] = params["value"]
-        res = self.devices.command(args["device_id"], args["action"], params)
+        res = await self.devices.command(args["device_id"], args["action"], params)
         await run.notify({"type": "devices", "devices": self.devices.describe()})
         return ToolOutcome(run.call, res.ok, res.executed, res.message, simulated=res.simulated, data={"state": res.state})
+
+    async def _open_project(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
+        project = self.perms.projects[args["project_id"]]
+        editor = self.perms.apps.get(project.editor)
+        return self._from_action(run.call, await asyncio.to_thread(self.controller.open_project, project, editor))
+
+    async def _media(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
+        return self._from_action(run.call, await asyncio.to_thread(self.controller.media, args["action"]))
+
+    async def _change_volume(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
+        return self._from_action(run.call, await asyncio.to_thread(self.controller.step_volume, args["delta"]))
+
+    async def _windows(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
+        action, query = args["action"], args.get("query", "")
+        if action == "close":
+            # ação destrutiva (pode perder trabalho não salvo): confirmação específica, com o título real
+            found = await asyncio.to_thread(self.controller.find_windows, query) if hasattr(self.controller, "find_windows") else []
+            title = found[0].title if len(found) == 1 else query
+            if not await run.confirm(f"Fechar a janela “{title}”? Trabalho não salvo pode ser perdido."):
+                return ToolOutcome(run.call, False, False, f"O usuário não autorizou fechar “{title}”.")
+        return self._from_action(run.call, await asyncio.to_thread(self.controller.windows, action, query, args.get("other", "")))
+
+    async def _set_lights(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
+        steps: list[tuple[str, dict[str, Any]]] = []
+        if "scene_id" in args:
+            scene = self.perms.scenes.get(args["scene_id"])
+            if scene is None:
+                return ToolOutcome(run.call, False, False, "Cena de luz não cadastrada.")
+            if not scene.on:
+                steps.append(("off", {}))
+            else:
+                if scene.color:
+                    # cor e brilho num passo só: o driver decide como aplicar o brilho
+                    steps.append(("color", {"color": scene.color, "brightness": scene.brightness}))
+                else:
+                    steps.append(("on", {}))
+                    if scene.brightness is not None:
+                        steps.append(("brightness", {"value": scene.brightness}))
+        else:
+            power = args.get("power")
+            if power == "off":
+                steps.append(("off", {}))
+            elif "color" in args:
+                steps.append(("color", {"color": args["color"], "brightness": args.get("brightness")}))
+            elif power == "on":
+                steps.append(("on", {}))
+            if "brightness" in args and power != "off" and "color" not in args:
+                steps.append(("brightness", {"value": args["brightness"]}))
+        if not steps:
+            return ToolOutcome(run.call, False, False, "Pedido recusado: informe scene_id, power, color ou brightness.")
+        results = []
+        for action, params in steps:
+            res = await self.devices.command("leds", action, params)
+            results.append(res)
+            if not res.executed:
+                break
+        await run.notify({"type": "devices", "devices": self.devices.describe()})
+        last = results[-1]
+        ok = all(r.executed for r in results)
+        summary = " ".join(dict.fromkeys(r.message for r in results)) if ok else last.message
+        return ToolOutcome(run.call, ok, ok, summary, simulated=last.simulated, data={"state": last.state, "confirmed": False})
 
     async def _remember(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
         fact = args["fact"].strip()

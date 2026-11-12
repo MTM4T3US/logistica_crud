@@ -83,3 +83,29 @@ implementado. Caminho investigado:
 - **Rotinas:** novas sequências em `permissions.json`, usando só `open_app`, `open_folder` e
   `set_volume`.
 - **Outro modelo de IA:** implementar `AIProvider`/`ChatSession`.
+
+
+## Desenho de segurança (0.3)
+
+### Fechadura — autenticação independente
+- O núcleo do JARVIS **nunca** tem permissão de destrancar. A ferramenta só aceita `status` e `lock`.
+- Destrancar exigirá dois fatores verificados **pelo firmware da fechadura**, não pelo PC:
+  (1) código temporário (TOTP) gerado em outro aparelho do dono, e (2) presença física (botão ou
+  biometria na porta). Comandos de voz e da IA não contam como fator.
+- Registro de eventos assinado na própria fechadura; chave mecânica de emergência que funciona sem
+  energia e sem rede; trava automática após N segundos aberta.
+
+### Motores (persiana e robô) — parada de emergência
+- Botão físico de emergência que corta a alimentação dos motores, independente do software.
+- Cão de guarda no firmware: sem heartbeat do núcleo por 1,5 s, o motor para (já simulado no robô).
+- Limites de curso por hardware (fim de curso) na persiana; velocidade máxima no firmware do robô.
+- Comandos de movimento só com o usuário presente (confirmação no HUD) até haver sensores de obstáculo.
+
+### Caixinha JARVIS (microfone + alto-falante)
+- ESP32-S3 com microfone I²S e alto-falante, conectada ao núcleo pela rede local.
+- Detecção de "Jarvis" na própria caixinha (ou envio só de trechos com voz ao núcleo, que detecta
+  localmente) — nunca streaming contínuo para a nuvem.
+- Autenticação por token próprio de dispositivo, conexão restrita à rede local, LED físico de
+  "microfone ativo" ligado por hardware ao microfone.
+- O núcleo já aceita trechos de áudio WAV com os modos `wake`/`followup`/`barge`; a caixinha usaria o
+  mesmo protocolo por um canal dedicado (a implementar).

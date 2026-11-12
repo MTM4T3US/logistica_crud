@@ -27,6 +27,8 @@ class AppEntry:
     name: str
     command: tuple[str, ...]
     confirm: bool = False
+    #: trechos do título da janela que provam que o app abriu (ex.: "Calculadora")
+    window: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,24 @@ class FolderEntry:
 
 
 @dataclass(frozen=True)
+class ProjectEntry:
+    id: str
+    name: str
+    path: str
+    editor: str = "vscode"   # id de um app cadastrado em "apps"; o caminho é passado como argumento fixo
+
+
+@dataclass(frozen=True)
+class SceneEntry:
+    """Cena de luz: só cores, brilho e liga/desliga — nada além do que os LEDs aceitam."""
+    id: str
+    name: str
+    on: bool = True
+    color: str | None = None
+    brightness: int | None = None
+
+
+@dataclass(frozen=True)
 class RoutineEntry:
     id: str
     name: str
@@ -44,8 +64,8 @@ class RoutineEntry:
     confirm: bool = False
 
 
-#: ferramentas que uma rotina pode encadear (nada além disso)
-ROUTINE_TOOLS = {"open_app", "open_folder", "set_volume"}
+#: ferramentas que uma rotina pode encadear (nada além disso — nunca ações destrutivas)
+ROUTINE_TOOLS = {"open_app", "open_folder", "open_project", "set_volume", "media_control", "window_control", "set_lights"}
 
 _SHELL_META = set("&|;<>`$\n\r")
 
@@ -59,8 +79,14 @@ class Permissions:
     apps: dict[str, AppEntry] = field(default_factory=dict)
     folders: dict[str, FolderEntry] = field(default_factory=dict)
     routines: dict[str, RoutineEntry] = field(default_factory=dict)
+    projects: dict[str, ProjectEntry] = field(default_factory=dict)
+    scenes: dict[str, SceneEntry] = field(default_factory=dict)
     volume_control: bool = True
     process_list: bool = True
+    media_control: bool = True
+    window_control: bool = True
+    #: fechar janelas pode perder trabalho não salvo: sempre exige confirmação específica
+    close_windows: bool = False
     source: str = "padrão (vazio)"
 
     @classmethod
@@ -73,17 +99,35 @@ class Permissions:
             cmd = tuple(str(c) for c in item.get("command", []))
             if not cmd or not all(_safe_arg(c) for c in cmd):
                 continue  # entrada inválida é ignorada, nunca "consertada"
-            perms.apps[item["id"]] = AppEntry(item["id"], item.get("name", item["id"]), cmd, bool(item.get("confirm", False)))
+            perms.apps[item["id"]] = AppEntry(item["id"], item.get("name", item["id"]), cmd, bool(item.get("confirm", False)),
+                                               tuple(str(w) for w in item.get("window", []) if str(w).strip()))
         for item in raw.get("folders", []):
             p = os.path.expandvars(os.path.expanduser(str(item.get("path", ""))))
             if p:
                 perms.folders[item["id"]] = FolderEntry(item["id"], item.get("name", item["id"]), p)
+        for item in raw.get("projects", []):
+            path = os.path.expandvars(os.path.expanduser(str(item.get("path", ""))))
+            editor = str(item.get("editor", "vscode"))
+            if path and item.get("id"):
+                perms.projects[item["id"]] = ProjectEntry(item["id"], item.get("name", item["id"]), path, editor)
+        for item in raw.get("scenes", []):
+            color = item.get("color")
+            if color is not None and not (isinstance(color, str) and len(color) == 7 and color.startswith("#")):
+                continue
+            bright = item.get("brightness")
+            if bright is not None and not (isinstance(bright, int) and 0 <= bright <= 100):
+                continue
+            if item.get("id"):
+                perms.scenes[item["id"]] = SceneEntry(item["id"], item.get("name", item["id"]), bool(item.get("on", True)), color, bright)
         for item in raw.get("routines", []):
             steps = tuple(s for s in item.get("steps", []) if s.get("tool") in ROUTINE_TOOLS)
             if steps and len(steps) == len(item.get("steps", [])):
                 perms.routines[item["id"]] = RoutineEntry(item["id"], item.get("name", item["id"]), steps, bool(item.get("confirm", False)))
         perms.volume_control = bool(raw.get("volume_control", True))
         perms.process_list = bool(raw.get("process_list", True))
+        perms.media_control = bool(raw.get("media_control", True))
+        perms.window_control = bool(raw.get("window_control", True))
+        perms.close_windows = bool(raw.get("close_windows", False))
         return perms
 
     def summary(self) -> dict[str, Any]:
@@ -92,6 +136,9 @@ class Permissions:
             "apps": [{"id": a.id, "name": a.name, "confirm": a.confirm} for a in self.apps.values()],
             "folders": [{"id": f.id, "name": f.name} for f in self.folders.values()],
             "routines": [{"id": r.id, "name": r.name, "steps": len(r.steps), "confirm": r.confirm} for r in self.routines.values()],
+            "projects": [{"id": p.id, "name": p.name} for p in self.projects.values()],
+            "scenes": [{"id": c.id, "name": c.name} for c in self.scenes.values()],
+            "media_control": self.media_control, "window_control": self.window_control, "close_windows": self.close_windows,
             "volume_control": self.volume_control,
             "process_list": self.process_list,
         }

@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { FACE_SCAN_SECONDS, LINES, MAP_BRIEFING, MODES, now, useStore, type Mode } from '../state/store'
 import { parseLine, WPS } from '../state/speech'
 import { MAP_SPEECH_DELAY } from '../scene/Director'
-import { liveAudio } from '../core/audio'
+import { audio, liveAudio } from '../core/audio'
 import { useJarvis, type DeviceData, type WeatherData } from '../state/jarvis'
-import { answerConfirm, interrupt, saveSettings, sendText, toggleTalk } from '../core/backend'
+import { answerConfirm, interrupt, saveSettings, sendText, setMuted, setWake, toggleTalk } from '../core/backend'
 import { Settings } from './Settings'
 
 /** Re-renderiza o HUD ~20×/s (relógio, legendas, porcentagens). */
@@ -25,7 +25,7 @@ function Badge() {
   const where = conn === 'online' ? (ai?.mode === 'ai' ? `NÚCLEO ONLINE · IA ${ai.provider.toUpperCase()}` : 'NÚCLEO ONLINE · MODO LOCAL (SEM IA)') : conn === 'connecting' ? 'CONECTANDO AO NÚCLEO…' : 'NÚCLEO OFFLINE'
   return (
     <div className="badge">
-      JARVIS OS 0.2.1 · {where}
+      JARVIS OS 0.3 · {where}
       {demo && <b className="demo">DEMO · DADOS SIMULADOS</b>}
     </div>
   )
@@ -300,6 +300,12 @@ function FacePanels({ modeT }: { modeT: number }) {
 const MicIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-6a3.5 3.5 0 0 0-7 0v6A3.5 3.5 0 0 0 12 15Zm6-3.5a6 6 0 0 1-12 0M12 17.5V21m-3.5 0h7" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
 )
+const MicOffIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden><path d="M9 5.6a3.5 3.5 0 0 1 6.5 0v5.9M15.4 13.2A3.5 3.5 0 0 1 8.5 11.5V9M18 11.5a6 6 0 0 1-1.1 3.5M6 11.5a6 6 0 0 0 9.4 4.9M12 17.5V21m-3.5 0h7M4 4l16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
+)
+const EarIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden><path d="M7 9a5 5 0 0 1 10 0c0 3-3 4-3 7a3 3 0 0 1-5.5 1.6M10 9.5a2 2 0 0 1 4 0M3.5 6.5a9 9 0 0 1 2-2.5M20.5 6.5a9 9 0 0 0-2-2.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+)
 const GearIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden><path d="M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Zm8 3.4-1.9-.7-.5-1.3.9-1.8-1.7-1.7-1.8.9-1.3-.5L13 4h-2l-.7 1.9-1.3.5-1.8-.9-1.7 1.7.9 1.8-.5 1.3L4 11v2l1.9.7.5 1.3-.9 1.8 1.7 1.7 1.8-.9 1.3.5L11 20h2l.7-1.9 1.3-.5 1.8.9 1.7-1.7-.9-1.8.5-1.3L20 13Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /></svg>
 )
@@ -319,7 +325,7 @@ function CommandBar() {
     const t = text.trim()
     if (t && sendText(t)) setText('')
   }
-  const micTitle = j.mic === 'denied' ? 'Permissão do microfone negada no navegador' : j.mic === 'unavailable' ? 'Microfone indisponível — use o texto' : recording ? 'Parar de gravar' : 'Falar (M)'
+  const micTitle = j.mic === 'muted' ? 'Microfone desligado' : j.mic === 'denied' ? 'Permissão do microfone negada no navegador' : j.mic === 'unavailable' ? 'Microfone indisponível — use o texto' : recording ? 'Parar de gravar' : 'Falar (M)'
   const lines = j.lines.slice(-3)
   return (
     <div className="cmd">
@@ -337,6 +343,13 @@ function CommandBar() {
           <button className="ghost" onClick={() => useJarvis.setState({ consentAsk: false })}>Só texto</button>
         </div>
       )}
+      {j.continuousAsk && (
+        <div className="chip ask">
+          <span>Escuta contínua: o microfone fica aberto e a palavra “{(j.core?.voice.wake_word ?? 'jarvis')}” é detectada NO SEU COMPUTADOR. Só depois dela o comando é transcrito{j.core?.voice.stt_cloud ? ' (na nuvem, pelo Gemini)' : ' (localmente)'}. Nada é gravado em disco. Autorizar?</span>
+          <button onClick={async () => { await saveSettings({ continuous_consent: true }); useJarvis.setState({ continuousAsk: false }); await setWake(true) }}>Autorizar</button>
+          <button className="ghost" onClick={() => useJarvis.setState({ continuousAsk: false })}>Agora não</button>
+        </div>
+      )}
       {j.error && !j.consentAsk && <div className="chip err" role="alert">{j.error.message}</div>}
       {j.notice && !j.error && <div className="chip">{j.notice.message}</div>}
       {lines.length > 0 && (
@@ -350,8 +363,14 @@ function CommandBar() {
         </div>
       )}
       <form className="cmd-row" onSubmit={submit}>
-        <button type="button" className={`icon mic ${j.mic}`} onClick={() => void toggleTalk()} disabled={!online} title={micTitle} aria-label={micTitle} aria-pressed={recording}>
+        <button type="button" className={`icon ${j.mic === 'muted' ? 'muted' : ''}`} onClick={() => setMuted(j.mic !== 'muted')} title={j.mic === 'muted' ? 'Religar o microfone (Ctrl+M)' : 'Desligar o microfone (Ctrl+M)'} aria-label="Desligar ou religar o microfone" aria-pressed={j.mic === 'muted'}>
+          <MicOffIcon />
+        </button>
+        <button type="button" className={`icon mic ${j.mic}`} onClick={() => void toggleTalk()} disabled={!online || j.mic === 'muted'} title={micTitle} aria-label={micTitle} aria-pressed={recording}>
           <MicIcon />
+        </button>
+        <button type="button" className={`icon ${j.wake ? 'on' : ''}`} onClick={() => void setWake(!j.wake)} disabled={!online || j.mic === 'muted'} title={j.wake ? 'Desligar a escuta contínua' : `Escuta contínua: diga “${j.core?.voice.wake_word ?? 'jarvis'}”`} aria-label="Escuta contínua" aria-pressed={j.wake}>
+          <EarIcon />
         </button>
         <input
           ref={input} value={text} onChange={(e) => setText(e.target.value)} disabled={!online} maxLength={2000} spellCheck={false}
@@ -366,7 +385,7 @@ function CommandBar() {
       {(recording || j.wake || cloudMic) && (
         <div className="flags">
           {recording && <span className="rec">● MICROFONE CAPTURANDO</span>}
-          {j.wake && !recording && <span className="rec soft">● ESCUTA CONTÍNUA · DIGA “{(j.core?.voice.wake_word ?? 'jarvis').toUpperCase()}”</span>}
+          {j.wake && !recording && <span className="rec soft">● ESCUTA CONTÍNUA · {audio.inWindow ? 'PODE CONTINUAR FALANDO' : `DIGA “${(j.core?.voice.wake_word ?? 'jarvis').toUpperCase()}”`} · DETECÇÃO LOCAL</span>}
           {cloudMic && <span className="cloud">NUVEM · ÁUDIO ENVIADO AO GEMINI</span>}
         </div>
       )}
@@ -394,6 +413,7 @@ function useKeys() {
     const on = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName
       if (e.key === 'Escape') { interrupt(); useJarvis.setState({ settingsOpen: false }); return }
+      if (e.ctrlKey && e.key.toLowerCase() === 'm') { e.preventDefault(); setMuted(useJarvis.getState().mic !== 'muted'); return }
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || e.ctrlKey || e.metaKey || e.altKey) return
       const s = useStore.getState()
       const i = Number(e.key) - 1

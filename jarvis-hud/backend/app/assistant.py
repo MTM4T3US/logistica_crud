@@ -11,7 +11,8 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from .ai.base import AIError, AIProvider, ToolOutcome
+from .ai.base import AIError, AIProvider, ToolCall, ToolOutcome
+from .router import Plan
 from .ai.gemini_provider import GeminiProvider
 from .ai.local_provider import LocalProvider
 from .ai.persona import build_system_prompt
@@ -27,9 +28,11 @@ from .system.monitor import SystemMonitor
 from .system.windows import SystemController, get_controller
 from .voice.audio_stream import SentenceChunker, normalize_for_speech, speakable, wav_info, wav_rms
 from .voice.stt import GeminiSTT, STTError, VoiceInput, WhisperSTT, extract_wake_command
-from .voice.tts import STYLES, GeminiTTS, LocalTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
+from .voice.wake import WakeDetector, make_wake_detector
+from .router import LocalRouter
+from .voice.tts import STYLES, GeminiTTS, LocalTTS, PiperTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 MAX_TOOL_ROUNDS = 6
 CONFIRM_TIMEOUT_S = 45.0
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -47,6 +50,9 @@ class Connection:
         self._confirms: dict[str, asyncio.Future] = {}
         self._lock = asyncio.Lock()
         self.closed = False
+        #: depois de uma resposta, segue ouvindo sem exigir "Jarvis" até este instante (monotonic)
+        self.window_until = 0.0
+        self.listen: asyncio.Task | None = None
 
     async def send(self, event: dict[str, Any]) -> None:
         if self.closed:
@@ -90,26 +96,42 @@ class Assistant:
         self, settings: Settings, *, gemini: GeminiProvider | None = None, memory: MemoryStore | None = None,
         perms: Permissions | None = None, controller: SystemController | None = None, monitor: SystemMonitor | None = None,
         devices: DeviceRegistry | None = None, weather: WeatherService | None = None, news: NewsService | None = None,
-        tts: VoiceOutput | None = None, stt: VoiceInput | None = None,
+        tts: VoiceOutput | None = None, stt: VoiceInput | None = None, wake: WakeDetector | None | bool = True,
     ):
         self.settings = settings
         self.memory = memory or MemoryStore(settings.db_path)
         self.perms = perms or Permissions.load(settings.permissions_path)
         self.controller = controller or get_controller()
         self.monitor = monitor or SystemMonitor()
-        self.devices = devices or DeviceRegistry(simulators=settings.devices_simulators)
+        self.devices = devices or self._make_devices(settings)
         self.weather = weather or WeatherService(settings.location, enabled=settings.weather_enabled)
         self.news = news or NewsService(settings.news_rss_url)
         self.gemini = gemini if gemini is not None else (GeminiProvider(settings) if settings.ai_configured else None)
-        self.local = LocalProvider(self.perms)
-        self.tts = tts or VoiceOutput(GeminiTTS(self.gemini, settings.tts_voice, settings.tts_style) if self.gemini else None, LocalTTS())
-        self.stt = stt or VoiceInput(GeminiSTT(self.gemini, settings.gemini_stt_model) if self.gemini else None, WhisperSTT(settings.whisper_model))
+        self.tts = tts or VoiceOutput(GeminiTTS(self.gemini, settings.tts_voice, settings.tts_style) if self.gemini else None, LocalTTS(),
+                                      PiperTTS(settings.models_dir, settings.piper_model))
+        self.whisper = WhisperSTT(settings.whisper_model, settings.models_dir, settings.whisper_device, settings.whisper_compute)
+        self.stt = stt or VoiceInput(GeminiSTT(self.gemini, settings.gemini_stt_model) if self.gemini else None, self.whisper)
+        if wake is True:
+            whisper = self.stt.engines.get("whisper") if hasattr(self.stt, "engines") else None
+            self.wake = make_wake_detector(settings.wake_engine, settings.wake_threshold, settings.wake_model, whisper, settings.wake_word)
+        else:
+            self.wake = wake or None
         self.tools = ToolRegistry(
             settings=settings, perms=self.perms, monitor=self.monitor, controller=self.controller, devices=self.devices,
             weather=self.weather, news=self.news, memory=self.memory, memory_enabled=lambda: bool(self.runtime()["memory_enabled"]),
         )
+        self.router = LocalRouter(self.perms, lambda: set(self.tools.specs()), settings.wake_word)
+        self.local = LocalProvider(self.router)
         self.last_ai_error: dict[str, str] | None = None
         self.last_timings: dict[str, float] | None = None
+
+    @staticmethod
+    def _make_devices(settings: Settings) -> DeviceRegistry:
+        if settings.leds_mode == "bluetooth":
+            from .devices.elk_bleddm import ElkBleddmLeds
+
+            return DeviceRegistry(simulators=settings.devices_simulators, leds=ElkBleddmLeds(settings.led_address, settings.led_name_prefix, brightness_mode=settings.led_brightness))
+        return DeviceRegistry(simulators=settings.devices_simulators, leds_off=settings.leds_mode == "off")
 
     async def startup(self) -> None:
         if self.gemini:
@@ -125,9 +147,10 @@ class Assistant:
     def runtime(self) -> dict[str, Any]:
         s = self.settings
         defaults = {
-            "tts_engine": s.tts_engine, "tts_voice_gemini": s.tts_voice, "tts_voice_local": "", "tts_style": s.tts_style if s.tts_style in STYLES else "cinematografico",
+            "tts_engine": s.tts_engine, "tts_voice_gemini": s.tts_voice, "tts_voice_local": "", "tts_voice_piper": "", "tts_style": s.tts_style if s.tts_style in STYLES else "cinematografico",
             "stt_engine": s.stt_engine, "speak": True, "memory_enabled": s.memory_enabled, "cloud_audio_consent": False, "user_title": "senhor",
-            "chat_model": "", "tts_model": "", "tts_speed": 1.0,
+            "chat_model": "", "tts_model": "", "tts_speed": 1.0, "router_mode": s.router_mode if s.router_mode in ("local_first", "ai_first") else "local_first",
+            "continuous_consent": False, "barge_in": True,
         }
         saved = self.memory.get_setting("runtime", {}) or {}
         return {**defaults, **{k: v for k, v in saved.items() if k in defaults}}
@@ -135,12 +158,15 @@ class Assistant:
     def update_runtime(self, patch: dict[str, Any]) -> dict[str, Any]:
         rt = self.runtime()
         rules = {
-            "tts_engine": lambda v: v in {"auto", "gemini", "local", "off"},
+            "tts_engine": lambda v: v in {"auto", "gemini", "piper", "local", "off"},
             "stt_engine": lambda v: v in {"auto", "gemini", "whisper", "off"},
             "tts_voice_gemini": lambda v: isinstance(v, str) and 0 < len(v) <= 40 and v.replace("-", "").replace("_", "").isalnum(),
             "tts_voice_local": lambda v: isinstance(v, str) and len(v) <= 300,
+            "tts_voice_piper": lambda v: isinstance(v, str) and len(v) <= 120,
             "tts_style": lambda v: v in STYLES,
             "tts_speed": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0.8 <= float(v) <= 1.3,
+            "router_mode": lambda v: v in ("local_first", "ai_first"),
+            "continuous_consent": lambda v: isinstance(v, bool), "barge_in": lambda v: isinstance(v, bool),
             "chat_model": lambda v: isinstance(v, str) and (v == "" or (self.gemini is not None and v in self.gemini.status().get("chat_models", []))),
             "tts_model": lambda v: isinstance(v, str) and (v == "" or (self.gemini is not None and v in self.gemini.status().get("tts_models", []))),
             "speak": lambda v: isinstance(v, bool), "memory_enabled": lambda v: isinstance(v, bool),
@@ -156,7 +182,11 @@ class Assistant:
         return rt
 
     def _voice_for(self, engine: TTSEngine, rt: dict[str, Any]) -> str | None:
-        return (rt["tts_voice_gemini"] if engine.id == "gemini" else rt["tts_voice_local"]) or None
+        if engine.id == "gemini":
+            return rt["tts_voice_gemini"] or None
+        if engine.id == "piper":
+            return rt.get("tts_voice_piper") or None
+        return rt["tts_voice_local"] or None
 
     # ------------------------------------------------------------------ estado para o HUD
     def ai_status(self) -> dict[str, Any]:
@@ -182,6 +212,8 @@ class Assistant:
                 "tts_active": tts_engine.id if tts_engine else None, "tts_cloud": bool(tts_engine and tts_engine.cloud),
                 "stt_active": stt_engine.id if stt_engine else None, "stt_cloud": bool(stt_engine and stt_engine.cloud),
                 "wake_word": self.settings.wake_word,
+                "wake": self.wake.describe() if self.wake else {"id": None, "available": False, "reason": "detecção local desligada (JARVIS_WAKE_ENGINE=off)", "local": True},
+                "conversation_window_s": self.settings.conversation_window_s,
             },
             "permissions": self.perms.summary(),
             "system_actions": {"platform": self.controller.platform, **self.controller.capabilities()},
@@ -199,9 +231,10 @@ class Assistant:
     async def run_turn(self, conn: Connection, text: str, source: str = "text", stt: dict[str, Any] | None = None) -> None:
         turn = uuid.uuid4().hex[:10]
         text = text.strip()[:4000]
+        shown = text or "Jarvis"
         marks: dict[str, float] = {"t0": time.monotonic()}
-        await conn.send({"type": "transcript", "role": "user", "text": text, "source": source, **{k: v for k, v in (stt or {}).items() if k != "stt_s"}})
-        await asyncio.to_thread(self.memory.add_message, "user", text, {"source": source})
+        await conn.send({"type": "transcript", "role": "user", "text": shown, "source": source, **{k: v for k, v in (stt or {}).items() if k not in ("stt_s", "wake_score")}})
+        await asyncio.to_thread(self.memory.add_message, "user", shown, {"source": source})
         await conn.send({"type": "phase", "phase": "thinking", "turn": turn})
 
         rt = self.runtime()
@@ -250,20 +283,43 @@ class Assistant:
                     return
                 if round_no == MAX_TOOL_ROUNDS:
                     raise AIError("tool_loop", "O pedido exigiu etapas demais e foi interrompido por segurança.")
-                outcomes: list[ToolOutcome] = []
-                for call in calls:
-                    label = self.tools.label(call.name)
-                    await conn.send({"type": "tool", "stage": "start", "turn": turn, "id": call.id, "name": call.name, "label": label, "args": call.args})
-                    out = await self.tools.execute(call, conn.confirm, conn.send)
-                    await asyncio.to_thread(self.memory.log_action, call.name, call.args, ok=out.ok, executed=out.executed, simulated=out.simulated, summary=out.summary)
-                    entry = {"id": call.id, "name": call.name, "label": label, "args": call.args, "ok": out.ok, "executed": out.executed, "simulated": out.simulated, "summary": out.summary}
-                    tool_log.append(entry)
-                    await conn.send({"type": "tool", "stage": "end", "turn": turn, **entry})
-                    outcomes.append(out)
+                outcomes = [await execute(call) for call in calls]
                 stream = session.send_tool_results(outcomes)
 
+        async def execute(call: ToolCall) -> ToolOutcome:
+            label = self.tools.label(call.name)
+            await conn.send({"type": "tool", "stage": "start", "turn": turn, "id": call.id, "name": call.name, "label": label, "args": call.args})
+            out = await self.tools.execute(call, conn.confirm, conn.send)
+            await asyncio.to_thread(self.memory.log_action, call.name, call.args, ok=out.ok, executed=out.executed, simulated=out.simulated, summary=out.summary)
+            entry = {"id": call.id, "name": call.name, "label": label, "args": call.args, "ok": out.ok, "executed": out.executed, "simulated": out.simulated, "summary": out.summary}
+            tool_log.append(entry)
+            await conn.send({"type": "tool", "stage": "end", "turn": turn, **entry})
+            return out
+
+        async def say(reply: str) -> None:
+            if not reply:
+                return
+            marks.setdefault("first_text", time.monotonic())
+            said.append(reply)
+            await conn.send({"type": "delta", "turn": turn, "text": reply})
+            for sentence in chunker.feed(reply + " "):
+                queue_speech(sentence)
+
+        async def route_local(plan: Plan) -> None:
+            """Comando reconhecido localmente: executa sem gastar a cota do Gemini."""
+            used.update(provider="roteador", model="comandos locais", mode="router")
+            outcomes = [await execute(call) for call in plan.calls]
+            await say(plan.render(outcomes, rt["user_title"]))
+
         try:
-            chain: list[tuple[AIProvider, str]] = ([(self.gemini, "ai")] if self.gemini else []) + [(self.local, "local")]
+            plan = None
+            if not text.strip():
+                plan = Plan("ack", render=lambda _o, title: f"Pois não, {title}?")   # disse só "Jarvis"
+            elif rt.get("router_mode", "local_first") == "local_first":
+                plan = self.router.match(text)
+            chain: list[tuple[AIProvider, str]] = [] if plan is not None else ([(self.gemini, "ai")] if self.gemini else []) + [(self.local, "local")]
+            if plan is not None:
+                await route_local(plan)
             for provider, mode in chain:
                 try:
                     await converse(provider, mode)
@@ -279,7 +335,9 @@ class Assistant:
                     # só cai para o modo local se nada foi dito/feito e o problema é de disponibilidade
                     if said or tool_log or mode == "local" or err.code in NO_FALLBACK:
                         break
-                    self.local.reason = f"Gemini indisponível: {err.code}"
+                    self.local.reason = {"rate_limit": "cota do Gemini esgotada", "offline": "sem internet", "timeout": "o Gemini não respondeu a tempo",
+                                         "unavailable": "Gemini sobrecarregado", "auth": "chave do Gemini recusada"}.get(err.code, f"Gemini indisponível: {err.code}")
+                    self.local.title = rt["user_title"]
                     await conn.send({"type": "notice", "message": "Continuando em modo local, sem IA."})
             for sentence in chunker.flush():
                 queue_speech(sentence)
@@ -432,17 +490,21 @@ class Assistant:
 
     # ------------------------------------------------------------------ voz do usuário
     async def handle_audio(self, conn: Connection, wav: bytes, mode: str = "ptt") -> None:
+        """Fala do usuário. Modos:
+        - ptt: botão de falar (intenção explícita);
+        - wake: escuta contínua — só segue se o detector LOCAL ouvir "Jarvis";
+        - followup: logo depois de uma resposta, dentro da janela de conversa (sem exigir "Jarvis");
+        - barge: o usuário falou enquanto o JARVIS falava — interrompe só se ouvir "Jarvis".
+        Nada sai do computador antes de passar pelo detector local (wake/barge)."""
         rt = self.runtime()
-        engine = self.stt.resolve(rt["stt_engine"])
 
         async def fail(code: str, message: str) -> None:
             await conn.send({"type": "error", "scope": "stt", "code": code, "message": message})
             await conn.send({"type": "phase", "phase": "idle"})
 
-        if engine is None:
-            return await fail("stt_unavailable", "Nenhum motor de transcrição disponível. Use o modo texto, ou configure o Gemini ou o Whisper local.")
-        if engine.cloud and not rt["cloud_audio_consent"]:
-            return await fail("consent_required", "O áudio só é enviado à nuvem depois da sua autorização nas configurações de privacidade.")
+        async def ignore(reason: str, score: float | None = None) -> None:
+            await conn.send({"type": "wake_ignored", "mode": mode, "reason": reason, "score": score})
+
         try:
             info = wav_info(wav)
         except Exception:
@@ -450,8 +512,38 @@ class Assistant:
         if not 0.25 <= float(info["duration_s"]) <= 60.0:
             return await fail("bad_audio", "A gravação precisa ter entre 0,25 e 60 segundos.")
         if wav_rms(wav) < 0.003:
+            if mode in ("wake", "barge", "followup"):
+                return await ignore("silêncio")
             await conn.send({"type": "stt_empty", "reason": "silêncio"})
             return await conn.send({"type": "phase", "phase": "idle"})
+        if mode in ("wake", "barge", "followup") and not rt["continuous_consent"]:
+            return await fail("consent_required", "A escuta contínua só funciona depois da sua autorização em Configurações → Microfone.")
+
+        detected_score: float | None = None
+        if mode in ("wake", "barge"):
+            if self.wake is None or not self.wake.available()[0]:
+                reason = self.wake.available()[1] if self.wake else "nenhum detector local configurado"
+                return await fail("wake_unavailable", f"Detecção local de “Jarvis” indisponível: {reason}")
+            try:
+                found = await self.wake.detect(wav)
+            except Exception as exc:
+                return await fail("wake_failed", f"O detector local falhou ({type(exc).__name__}).")
+            if not found.detected:
+                return await ignore("sem a palavra-chave", found.score)   # descartado no próprio computador
+            detected_score = found.score
+            if mode == "barge":
+                await conn.send({"type": "barge_accept", "score": found.score})
+
+        engine = self.stt.resolve(rt["stt_engine"])
+        if engine is None:
+            return await fail("stt_unavailable", "Nenhum motor de transcrição disponível. Use o modo texto, ou instale o Whisper local / configure o Gemini.")
+        if engine.cloud and not rt["cloud_audio_consent"]:
+            return await fail("consent_required", "O áudio só é enviado à nuvem depois da sua autorização nas configurações de privacidade.")
+        if mode in ("wake", "barge"):
+            # a palavra-chave foi confirmada: interrompe o que estiver em andamento e assume
+            if conn.turn is not None and conn.turn is not asyncio.current_task():
+                await conn.cancel_turn()
+            conn.turn = asyncio.current_task()
         await conn.send({"type": "phase", "phase": "transcribing", "engine": engine.id, "cloud": engine.cloud})
         started = time.monotonic()
         try:
@@ -460,17 +552,20 @@ class Assistant:
             return await fail(err.code, err.message)
         stt_s = round(time.monotonic() - started, 2)
         text = result.text
-        if not text:
+        if not text and mode == "ptt":
             await conn.send({"type": "stt_empty", "reason": "sem fala"})
             return await conn.send({"type": "phase", "phase": "idle"})
-        source = "voice"
-        if mode == "wake":
+        source = {"ptt": "voice", "followup": "voice", "wake": "wake", "barge": "wake"}.get(mode, "voice")
+        if mode in ("wake", "barge"):
             command = extract_wake_command(text, self.settings.wake_word)
-            if command is None:
-                await conn.send({"type": "wake_ignored"})
-                return await conn.send({"type": "phase", "phase": "idle"})
-            text, source = command or "Jarvis?", "wake"
-        await self.run_turn(conn, text, source, {"engine": result.engine, "cloud": result.cloud, "stt_s": stt_s})
+            # o detector local já confirmou a palavra; se a transcrição não a trouxer, usa o texto todo
+            text = command if command is not None else text
+        elif mode == "followup" and not text:
+            return await ignore("sem fala")
+        info = {"engine": result.engine, "cloud": result.cloud, "stt_s": stt_s}
+        if detected_score is not None:
+            info["wake_score"] = detected_score
+        await self.run_turn(conn, text, source, info)
 
     async def voice_sample(self, engine_id: str, voice: str | None, text: str | None = None, style: str | None = None) -> dict[str, Any]:
         """Amostra para ouvir e comparar no painel. Fica em cache local: ouvir de novo a mesma

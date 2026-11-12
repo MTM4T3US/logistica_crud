@@ -12,6 +12,8 @@ import re
 import time
 import uuid
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any, AsyncIterator
 
 import httpx
@@ -51,12 +53,14 @@ def map_gemini_error(exc: BaseException) -> AIError:
         status = (getattr(exc, "status", "") or "").upper()
         msg = (getattr(exc, "message", "") or "").lower()
         if code == 429 or status == "RESOURCE_EXHAUSTED":
-            wait, scope = quota_info(exc)
+            wait, scope, limit = quota_details(exc)
             if scope == "day":
                 text = "A cota diária gratuita deste modelo Gemini acabou" + (f" (volta em cerca de {max(1, round(wait / 3600))} h)." if wait else ".")
             else:
                 text = "O limite por minuto da API Gemini foi atingido" + (f"; aguarde {round(wait)} s." if wait else ". Aguarde um instante.")
-            return AIError("rate_limit", text, detail=detail, retry_after_s=wait, scope=scope)
+            err = AIError("rate_limit", text, detail=detail, retry_after_s=wait, scope=scope)
+            err.limit = limit
+            return err
         if code in (401, 403) or status in {"UNAUTHENTICATED", "PERMISSION_DENIED"} or "api key" in msg:
             return AIError("auth", "A chave da API Gemini foi recusada. Confira GEMINI_API_KEY em backend/.env.", detail=detail)
         if code == 404 or status == "NOT_FOUND":
@@ -69,8 +73,15 @@ def map_gemini_error(exc: BaseException) -> AIError:
 
 def quota_info(exc: BaseException) -> tuple[float | None, str]:
     """Lê do erro 429 quanto esperar (RetryInfo) e se a cota estourada é por minuto ou por dia."""
+    wait, scope, _ = quota_details(exc)
+    return wait, scope
+
+
+def quota_details(exc: BaseException) -> tuple[float | None, str, int | None]:
+    """Como quota_info, mais o limite informado pelo Google (quotaValue), quando vier."""
     wait: float | None = None
     scope = "minute"
+    limit: int | None = None
     body = getattr(exc, "details", None)
     items = (body.get("error", {}) if isinstance(body, dict) else {}).get("details", []) or []
     for item in items:
@@ -79,15 +90,27 @@ def quota_info(exc: BaseException) -> tuple[float | None, str]:
             m = re.match(r"([\d.]+)s", str(item.get("retryDelay", "")))
             wait = float(m.group(1)) if m else wait
         elif kind == "QuotaFailure":
-            if any("PerDay" in str(v.get("quotaId", "")) for v in item.get("violations", [])):
-                scope = "day"
+            for v in item.get("violations", []):
+                if "PerDay" in str(v.get("quotaId", "")):
+                    scope = "day"
+                try:
+                    limit = int(v.get("quotaValue"))
+                except (TypeError, ValueError):
+                    pass
     if wait is None:
         m = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)s", str(getattr(exc, "message", "") or ""))
         if m:
             wait = int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + float(m.group(3))
     if wait and wait > 600:
         scope = "day"
-    return wait, scope
+    return wait, scope, limit
+
+
+PACIFIC = ZoneInfo("America/Los_Angeles")   # as cotas diárias do Gemini viram à meia-noite do Pacífico
+
+
+def quota_day() -> str:
+    return datetime.now(PACIFIC).strftime("%Y-%m-%d")
 
 
 def model_version(name: str) -> tuple[int, int]:
@@ -164,6 +187,11 @@ class GeminiProvider(AIProvider):
         self.tts_style_mode: dict[str, str] = {}
         self._state_path: Path | None = None if str(settings.db_path) == ":memory:" else settings.db_path.parent / "gemini_state.json"
         self._chosen_at = 0.0
+        #: pedidos contados por este computador no dia (fuso do Pacífico) e limites informados pela API
+        self.usage: dict[str, Any] = {"day": quota_day(), "counts": {}}
+        self.limits: dict[str, dict[str, int]] = {}
+        self.connection: dict[str, Any] = {"state": "desconhecida", "at": None, "detail": ""}
+        self._saved_at = 0.0
         self._load_state()
 
     # ------------------------------------------------------------------ memória entre execuções
@@ -180,6 +208,10 @@ class GeminiProvider(AIProvider):
         self.cooldowns = {m: t for m, t in data.get("cooldowns", {}).items() if isinstance(t, (int, float)) and t > now}
         self.thinking_mode = {m: v for m, v in data.get("thinking_mode", {}).items() if isinstance(v, str)}
         self.tts_style_mode = {m: v for m, v in data.get("tts_style_mode", {}).items() if isinstance(v, str)}
+        usage = data.get("usage", {})
+        if isinstance(usage, dict) and usage.get("day") == quota_day() and isinstance(usage.get("counts"), dict):
+            self.usage = {"day": usage["day"], "counts": {k: int(v) for k, v in usage["counts"].items() if isinstance(v, int)}}
+        self.limits = {m: {k: int(v) for k, v in d.items() if isinstance(v, int)} for m, d in data.get("limits", {}).items() if isinstance(d, dict)}
         if self.wanted_model == "auto" and isinstance(data.get("chosen"), str) and now - float(data.get("chosen_at", 0)) < self.settings.gemini_probe_ttl_s:
             self.model, self._chosen_at = data["chosen"], float(data.get("chosen_at", 0))
             self.probes = data.get("probes", {}) if isinstance(data.get("probes"), dict) else {}
@@ -187,8 +219,9 @@ class GeminiProvider(AIProvider):
     def save_state(self) -> None:
         if not self._state_path:
             return
+        self._saved_at = time.time()
         data = {"chosen": self.model, "chosen_at": self._chosen_at, "probes": self.probes, "cooldowns": self.cooldowns,
-                "thinking_mode": self.thinking_mode, "tts_style_mode": self.tts_style_mode}
+                "thinking_mode": self.thinking_mode, "tts_style_mode": self.tts_style_mode, "usage": self.usage, "limits": self.limits}
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             self._state_path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -198,10 +231,36 @@ class GeminiProvider(AIProvider):
     def cooling(self, model: str) -> bool:
         return self.cooldowns.get(model, 0) > time.time()
 
+    def count(self, model: str) -> None:
+        """Conta um pedido atendido. É a contagem DESTE computador — o Google não informa o saldo."""
+        if self.usage.get("day") != quota_day():
+            self.usage = {"day": quota_day(), "counts": {}}
+        self.usage["counts"][model] = int(self.usage["counts"].get(model, 0)) + 1
+        self.connection = {"state": "online", "at": time.time(), "detail": ""}
+        if time.time() - self._saved_at > 30:
+            self.save_state()
+
+    def note_network(self, err: AIError) -> None:
+        if err.code in ("offline", "timeout"):
+            self.connection = {"state": "offline" if err.code == "offline" else "instável", "at": time.time(), "detail": err.message}
+
+    def usage_report(self) -> dict[str, Any]:
+        if self.usage.get("day") != quota_day():
+            self.usage = {"day": quota_day(), "counts": {}}
+        models = sorted(set(self.usage["counts"]) | set(self.limits) | {self.model, self.tts_model, self.stt_model})
+        return {
+            "day": self.usage["day"],
+            "models": {m: {"today": self.usage["counts"].get(m, 0), "day_limit": self.limits.get(m, {}).get("day"),
+                           "minute_limit": self.limits.get(m, {}).get("minute"), "exhausted": self.cooling(m)} for m in models},
+        }
+
     def note_limit(self, model: str, err: AIError) -> None:
         """Registra que a cota deste modelo estourou, para não insistir nele até voltar."""
         if err.code != "rate_limit":
             return
+        limit = getattr(err, "limit", None)
+        if isinstance(limit, int):
+            self.limits.setdefault(model, {})["day" if err.scope == "day" else "minute"] = limit
         wait = err.retry_after_s or (3600.0 if err.scope == "day" else 30.0)
         self.cooldowns[model] = time.time() + min(wait, 86400.0) + 1.0
         self.save_state()
@@ -284,6 +343,7 @@ class GeminiProvider(AIProvider):
             "note": self.model_note, "resolved": self.resolved, "chat_models": self.chat_models(), "tts_models": self.tts_models(),
             "probes": self.probes, "thinking": self.thinking_mode.get(self.model),
             "limited": sorted(m for m in self.cooldowns if self.cooling(m)),
+            "usage": self.usage_report(), "connection": self.connection,
             "last_error": self.last_error.code if self.last_error else None,
         }
 
@@ -476,6 +536,10 @@ class GeminiSession(ChatSession):
                         step += 1
                         continue
                     is_last = attempt == len(plan) - 1
+                    self.p.note_network(last)
+                    if last.code == "unavailable" or last.code == "timeout":
+                        # modelo sobrecarregado/travado: evita por 20 min (aprendido com o uso, sem testes extras)
+                        self.p.cooldowns[model] = time.time() + 1200
                     if last.code == "rate_limit":
                         self.p.note_limit(model, last)      # cota por modelo: o próximo da fila pode ter saldo
                         limited.append(model)
@@ -499,6 +563,7 @@ class GeminiSession(ChatSession):
                         raise AIError("blocked", "O Gemini bloqueou a resposta pelas políticas de segurança.")
                     raise AIError("empty", "O Gemini não devolveu conteúdo para este pedido.", detail=f"finish_reason={reason}")
                 self.p.thinking_mode[model] = mode
+                self.p.count(model)
                 if model != self.p.model:
                     # o modelo principal falhou e este respondeu: passa a ser o principal
                     why = "cota esgotada" if self.p.model in limited else (last.code if last else "erro")

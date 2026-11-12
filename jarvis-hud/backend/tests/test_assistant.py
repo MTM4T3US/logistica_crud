@@ -18,7 +18,7 @@ from app.voice.tts import VoiceOutput
 from .conftest import FakeConn, FakeController, FakeSTT, FakeTTS, ScriptedProvider, call, tone_wav
 
 
-def build(settings, perms, script=None, *, tts=None, stt=None, runtime=None, gemini="scripted"):
+def build(settings, perms, script=None, *, tts=None, stt=None, runtime=None, gemini="scripted", wake=None):
     provider = ScriptedProvider(script or []) if gemini == "scripted" else gemini
     out = VoiceOutput(None, None)
     out.engines = tts if tts is not None else {}
@@ -26,9 +26,10 @@ def build(settings, perms, script=None, *, tts=None, stt=None, runtime=None, gem
     vin.engines = stt if stt is not None else {}
     core = Assistant(
         settings, gemini=provider, memory=MemoryStore(":memory:"), perms=perms, controller=FakeController(), devices=DeviceRegistry(),
-        weather=WeatherService(settings.location, enabled=False), tts=out, stt=vin,
+        weather=WeatherService(settings.location, enabled=False), tts=out, stt=vin, wake=wake,
     )
-    core.update_runtime({"tts_engine": "auto", "stt_engine": "auto", **(runtime or {})})
+    # os testes de conversa exercitam o provedor; o roteador local tem testes próprios
+    core.update_runtime({"tts_engine": "auto", "stt_engine": "auto", "router_mode": "ai_first", **(runtime or {})})
     return core, provider
 
 
@@ -87,7 +88,7 @@ async def test_ai_failure_falls_back_to_local_mode_with_real_data(settings, perm
     assert conn.of("error")[0] == {"type": "error", "scope": "ai", "code": "offline", "message": "Sem conexão com o Gemini. Verifique a internet."}
     assert conn.of("notice")[0]["message"] == "Continuando em modo local, sem IA."
     end = conn.of("turn_end")[0]
-    assert end["mode"] == "local" and end["provider"] == "local" and "processador está em" in end["text"] and end["error"] is None
+    assert end["mode"] == "local" and end["provider"] == "local" and "Processador em" in end["text"] and end["error"] is None
     assert conn.of("tool")[1]["name"] == "get_system_status" and conn.of("tool")[1]["executed"] is True
     assert core.ai_status()["last_error"]["code"] == "offline"
 
@@ -109,11 +110,11 @@ async def test_without_key_the_system_stays_usable_and_says_it_is_not_ai(setting
     assert core.gemini is None and core.ai_status()["configured"] is False and core.ai_status()["mode"] == "local"
     conn = FakeConn()
     await core.run_turn(conn, "que horas são?")
-    assert "em Itumbiara" in conn.of("turn_end")[0]["text"] and conn.of("tool")[1]["name"] == "get_local_time"
+    assert conn.of("turn_end")[0]["text"].startswith("São ") and conn.of("tool")[1]["name"] == "get_local_time" and conn.of("turn_end")[0]["mode"] == "local"
     conn = FakeConn()
     await core.run_turn(conn, "escreva um poema")
     text = conn.of("turn_end")[0]["text"]
-    assert "sem inteligência artificial" in text and conn.of("tool") == []
+    assert "sem acesso à inteligência artificial" in text and "Comandos locais seguem funcionando" in text and conn.of("tool") == []
 
 
 async def test_speech_is_synthesized_per_sentence_with_real_text(settings, perms):
@@ -174,7 +175,26 @@ async def test_interrupt_stops_generation_and_speech(settings, perms):
     assert len(conn.events) == n
 
 
-async def test_voice_input_requires_consent_for_cloud_and_handles_silence(settings, perms):
+class FakeWake:
+    id, label = "fake", "detector falso"
+
+    def __init__(self, hits: set[str] | None = None):
+        self.hits, self.calls = hits or set(), 0
+
+    def available(self):
+        return True, ""
+
+    async def detect(self, wav):
+        from app.voice.wake import WakeResult
+
+        self.calls += 1
+        hit = self.next_hit
+        return WakeResult(hit, 0.99 if hit else 0.01, "fake")
+
+    next_hit = False
+
+
+async def test_push_to_talk_requires_consent_for_cloud_and_handles_silence(settings, perms):
     cloud = FakeSTT("Jarvis, que horas são?", engine_id="gemini", cloud=True)
     core, _ = build(settings, perms, [["São dez horas."]], stt={"gemini": cloud})
     conn = FakeConn()
@@ -195,19 +215,83 @@ async def test_voice_input_requires_consent_for_cloud_and_handles_silence(settin
         assert conn.of("error")[0]["code"] == "bad_audio"
 
 
-async def test_wake_word_mode_ignores_speech_not_addressed_to_jarvis(settings, perms):
-    local = FakeSTT("vou sair para almoçar", engine_id="whisper")
-    core, provider = build(settings, perms, [["Às ordens."], ["Às ordens, senhor."]], stt={"whisper": local})
+async def test_continuous_listening_detects_jarvis_locally_before_any_cloud_use(settings, perms):
+    wake = FakeWake()
+    cloud = FakeSTT("Jarvis, abre o editor", engine_id="gemini", cloud=True)
+    core, provider = build(settings, perms, [["Às ordens."], ["Às ordens, senhor."]], stt={"gemini": cloud}, wake=wake, runtime={"cloud_audio_consent": True})
+    # sem consentimento explícito para a escuta contínua: nada é processado
     conn = FakeConn()
     await core.handle_audio(conn, tone_wav(), "wake")
-    assert conn.of("wake_ignored") and conn.of("transcript") == [] and provider.seen_user == []
-    local.text = "Jarvis, abre o editor"
+    assert conn.of("error")[0]["code"] == "consent_required" and wake.calls == 0 and cloud.calls == 0
+    core.update_runtime({"continuous_consent": True})
+    # fala sem "Jarvis": descartada NO COMPUTADOR — a nuvem nunca recebe o áudio
+    wake.next_hit = False
     conn = FakeConn()
     await core.handle_audio(conn, tone_wav(), "wake")
-    assert conn.of("transcript")[0]["text"] == "abre o editor" and conn.of("transcript")[0]["source"] == "wake" and provider.seen_user == ["abre o editor"]
-    local.text = "Jarvis"
-    await core.handle_audio(FakeConn(), tone_wav(), "wake")
-    assert provider.seen_user[-1] == "Jarvis?"
+    assert conn.of("wake_ignored")[0]["reason"] == "sem a palavra-chave" and wake.calls == 1 and cloud.calls == 0 and provider.seen_user == []
+    # com "Jarvis": só então transcreve e responde, sem o "Jarvis" no comando
+    wake.next_hit = True
+    conn = FakeConn()
+    await core.handle_audio(conn, tone_wav(), "wake")
+    assert cloud.calls == 1 and conn.of("transcript")[0]["text"] == "abre o editor" and conn.of("transcript")[0]["source"] == "wake" and provider.seen_user == ["abre o editor"]
+    # só "Jarvis": resposta curta local, sem gastar o Gemini
+    cloud.text = "Jarvis."
+    conn = FakeConn()
+    await core.handle_audio(conn, tone_wav(), "wake")
+    assert conn.of("turn_end")[0]["text"] == "Pois não, senhor?" and conn.of("turn_end")[0]["mode"] == "router" and len(provider.seen_user) == 1
+    # janela de conversa: sem exigir "Jarvis" e sem passar pelo detector
+    before = wake.calls
+    cloud.text = "e amanhã?"
+    conn = FakeConn()
+    await core.handle_audio(conn, tone_wav(), "followup")
+    assert wake.calls == before and provider.seen_user[-1] == "e amanhã?"
+
+
+async def test_without_local_detector_continuous_listening_never_falls_back_to_cloud(settings, perms):
+    cloud = FakeSTT("Jarvis, que horas são?", engine_id="gemini", cloud=True)
+    core, _ = build(settings, perms, stt={"gemini": cloud}, runtime={"cloud_audio_consent": True, "continuous_consent": True})
+    conn = FakeConn()
+    await core.handle_audio(conn, tone_wav(), "wake")
+    assert conn.of("error")[0]["code"] == "wake_unavailable" and cloud.calls == 0
+
+
+async def test_barge_in_interrupts_only_when_jarvis_is_heard(settings, perms):
+    gate = asyncio.Event()
+
+    async def hold():
+        await gate.wait()
+
+    wake = FakeWake()
+    local = FakeSTT("Jarvis, pare", engine_id="whisper")
+    core, _ = build(settings, perms, [["Uma frase longa sendo dita agora. ", hold, "fim"]], stt={"whisper": local}, tts={"local": FakeTTS("local")},
+                    wake=wake, runtime={"continuous_consent": True, "router_mode": "local_first"})
+    conn = FakeConn()
+    conn.turn = asyncio.create_task(core.run_turn(conn, "explique a teoria da relatividade"))
+    await asyncio.sleep(0.05)
+    wake.next_hit = False
+    await core.handle_audio(conn, tone_wav(), "barge")       # eco/ruído durante a fala: não interrompe
+    assert not conn.turn.done() and conn.of("barge_accept") == [] and local.calls == 0
+    wake.next_hit = True
+    talking = conn.turn
+    await core.handle_audio(conn, tone_wav(), "barge")       # "Jarvis, pare": interrompe e não responde nada
+    assert talking.cancelled() or talking.done()
+    assert conn.of("barge_accept") and [e["interrupted"] for e in conn.of("turn_end")] == [True, False]
+    assert conn.of("turn_end")[-1]["text"] == "" and conn.of("transcript")[-1]["text"] == "pare"
+
+
+async def test_router_executes_known_commands_without_the_ai(settings, perms):
+    core, provider = build(settings, perms, [["não deveria ser chamado"]], runtime={"router_mode": "local_first"})
+    conn = FakeConn()
+    await core.run_turn(conn, "Jarvis, abre o bloco de notas")
+    end = conn.of("turn_end")[0]
+    assert end["mode"] == "router" and end["provider"] == "roteador" and provider.started == [] and core.controller.opened == ["notas"]
+    assert end["text"] == "Bloco de Notas aberto, senhor." and conn.of("tool")[1]["executed"] is True
+    conn = FakeConn()
+    await core.run_turn(conn, "abre o bloco de notas e me explique o que é um quasar")
+    assert provider.seen_user == ["abre o bloco de notas e me explique o que é um quasar"]   # pergunta aberta: vai para a IA
+    conn = FakeConn()
+    await core.run_turn(conn, "volume 25")
+    assert core.controller.volume == 25 and conn.of("turn_end")[0]["text"] == "Volume em 25 por cento."
 
 
 async def test_stt_unavailable_or_failing_is_reported(settings, perms):
