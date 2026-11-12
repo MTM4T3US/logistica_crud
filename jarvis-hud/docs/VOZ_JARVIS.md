@@ -3,111 +3,129 @@
 ## Identidade vocal pretendida
 
 Masculina, adulta, registro médio-grave, timbre encorpado e elegante. Dicção brasileira clara,
-ritmo moderado com pausas naturais, calma e confiante. Um leve acabamento "tecnológico" que
-não atrapalhe a compreensão. É uma identidade **original**: nada aqui clona ou imita a voz de
-um ator ou dublador.
+ritmo moderado com pausas naturais, calma e confiante, com um leve acabamento "tecnológico" que
+não atrapalhe a compreensão. É uma identidade **original**: nada aqui clona ou imita a voz de um
+ator ou dublador. O SDK do Gemini tem um recurso de voz replicada (`ReplicatedVoiceConfig`); ele
+não é usado e não deve ser usado para copiar a voz de outra pessoa.
 
-## Estado real desta entrega
+## Estado (0.2.1)
 
 | Item | Situação |
 |---|---|
-| Caminho completo texto → voz → núcleo reagindo | Funciona e foi medido (ver `evidence/0.2`). |
-| Voz local em Linux (espeak-ng) | Testada. É robótica — serve como reserva sem nuvem. |
-| Voz local no Windows (SAPI5 via pyttsx3) | Implementada, **não testada** (não tive acesso a Windows). |
-| Gemini TTS (Charon, Orus e outras) | Implementado, **não testado com a API real** (sem chave). |
-| Comparação das vozes em português | **Não feita.** O script abaixo gera as amostras para você comparar. |
-| Gemini Live API | Investigada, **não integrada** (ver abaixo). |
+| Amostras reais com vozes Gemini | ✅ Charon, Orus, Algieba, Algenib, Iapetus e Schedar, mais 3 interpretações da Charon. |
+| Ouvir e escolher cada voz pelo painel | ✅ Configurações → Voz: ▶ para ouvir, "Usar" para escolher. |
+| Interpretação, ritmo e pausas | ✅ 4 interpretações; ritmo de 0,8× a 1,3×; normalização de horas e unidades. |
+| Latência | ✅ Streaming: primeiro áudio ~0,7 s após a frase ficar pronta. |
+| Núcleo sincronizado com o áudio verdadeiro | ✅ Amplitude medida do áudio que está tocando. |
+| Escolha final da voz | ⚠️ Depende de você ouvir. Eu meço o tom, mas não avalio timbre nem naturalidade. |
+| Voz local no Windows (SAPI5) | ⚠️ Implementada, não testada. |
+| Gemini Live API | ❌ Não integrada (pendência da 0.3). |
 
-Ou seja: a "voz cinematográfica" ainda depende de você rodar a comparação com a sua chave e
-escolher. Não afirmo que Charon ou Orus entregam o resultado desejado.
+## Amostras para comparar
 
-## Como comparar as vozes
+Em [`evidence/0.2.1/vozes/`](../evidence/0.2.1/vozes/) (MP3). Frase: "Bom dia, senhor. Todos os
+sistemas estão operacionais. Em que posso ajudá-lo?" — modelo `gemini-3.8-flash-tts`,
+interpretação cinematográfica, salvo indicação.
 
-```powershell
-cd jarvis-hud\backend
-.venv\Scripts\python scripts\check_gemini.py Charon Orus Algieba Algenib Iapetus Schedar
-```
+| Voz | Tom mediano | Observação |
+|---|---|---|
+| Algieba | 102 Hz | a mais grave medida |
+| Charon | 128 Hz | |
+| Schedar | 128 Hz | |
+| Algenib | 130 Hz | |
+| Iapetus | 132 Hz | |
+| Orus | 141 Hz | a mais aguda das seis |
+| Charon · sóbria | 103 Hz | a interpretação sóbria deixou a voz mais grave |
+| Charon · calorosa | 123 Hz | |
+| Charon · neutra | 138 Hz | sem direção |
+| Charon · streaming (3.1-flash-tts-preview) | 183 Hz | mesmo nome, outro modelo: bem mais aguda |
 
-Para cada voz o script grava `backend/samples/gemini-<voz>.wav` com a mesma frase e imprime a
-duração e o **tom mediano em Hz** (quanto menor, mais grave). O número ajuda a ordenar o
-registro, mas timbre, naturalidade e sotaque só se julgam ouvindo. Depois escolha em
-Configurações → Áudio → Voz (o botão "Ouvir amostra" repete a frase) ou em `JARVIS_TTS_VOICE`.
+O tom mediano é medido por autocorrelação; quanto menor, mais grave. É um critério objetivo para
+o "médio-grave", não para timbre. Sugestão de ordem para ouvir: **Algieba, Charon (sóbria),
+Charon, Schedar**.
 
-A lista do painel (Charon, Orus, Algieba, Algenib, Iapetus, Rasalgethi, Schedar, Sadaltager,
-Alnilam, Enceladus, Gacrux, Fenrir, Puck) e os adjetivos ao lado vêm da descrição pública das
-vozes que eu conhecia; a lista oficial pode ter mudado.
+Para gerar mais vozes com a sua cota: `VALIDAR_GEMINI.bat --vozes Rasalgethi Sadaltager Kore`
+(cada voz gasta 1 pedido de voz).
 
-## Direção de estilo (Gemini TTS)
+## Como a interpretação é enviada
 
-O Gemini TTS aceita instruções em linguagem natural junto com o texto. A direção usada está em
-`backend/app/voice/tts.py` (`STYLE_PROMPT`):
+O Gemini TTS recebe a direção de interpretação no **campo de estilo** de cada trecho
+(`speech_metadata.style`), separado do texto a ser falado. Na 0.2 a direção ia junto do texto e
+o modelo a **lia em voz alta** (amostra de 38 s); isso foi corrigido. Se um modelo recusar o campo
+de estilo, só o texto é enviado — a direção nunca vira fala.
 
-> Leia o texto a seguir em português do Brasil, com dicção brasileira natural e perfeitamente
-> compreensível. Voz masculina adulta, registro médio-grave, timbre encorpado e elegante. Tom
-> calmo, confiante e cortês, como um assistente sofisticado: pronúncia clara e precisa, ritmo
-> moderado com pausas naturais, sem soar robótico nem teatral.
+Interpretações (`backend/app/voice/tts.py`, `STYLES`):
 
-Ajuste esse texto para refinar a interpretação (por exemplo, mais sobriedade ou mais calor).
-A gravidade vem da escolha da voz e da direção, não de baixar o tom artificialmente.
+| Interpretação | Direção (resumo) |
+|---|---|
+| Cinematográfica (padrão) | assistente de IA sofisticado: calmo, confiante, cortês, elegância contida, leve ironia fina; pausas curtas nas vírgulas e mais longas entre frases |
+| Sóbria | sereno, profissional, discreto, quase sem ênfases |
+| Calorosa | acolhedor, leve sorriso na voz, sem perder a elegância |
+| Neutra | sem direção |
+
+Todas começam por "voz masculina adulta, registro médio-grave, timbre encorpado, português do
+Brasil com dicção natural e clara". Edite os textos para refinar.
+
+## Ritmo, pausas e pronúncia
+
+- **Ritmo:** no Gemini, o controle de velocidade vira uma instrução na direção ("ritmo um pouco
+  mais lento…"); acelerar a reprodução mudaria o tom da voz. Na voz local, ajusta a taxa do motor.
+- **Pausas:** travessões e parênteses viram vírgulas; a direção pede pausas maiores entre frases.
+- **Pronúncia:** antes da síntese, "07:18" vira "7 e 18", "22.5°C" vira "22,5 graus", "87%" vira
+  "87 por cento", "km/h" vira "quilômetros por hora", "GB" vira "gigabytes". A legenda mostra o
+  texto original.
+
+## Latência
+
+| Etapa | Medido |
+|---|---|
+| Arquivo de voz inteiro (sem streaming) | 2,7–4,0 s por pedido |
+| Primeiro pedaço em streaming | 0,70–0,74 s |
+
+Como a fala começa cedo:
+
+1. A primeira frase é enviada à síntese assim que termina (mesmo curta, como "Bom dia, senhor.").
+2. O áudio vem em streaming e o HUD toca cada pedaço assim que chega.
+3. As frases seguintes são sintetizadas em paralelo e tocadas em ordem, sem buracos.
+
+**Modo econômico** (padrão, `JARVIS_TTS_CHUNKING=economico`): a primeira frase sai sozinha e todo o
+resto vai em um único pedido — no máximo 2 pedidos de voz por resposta, por causa da cota. Com
+`frase`, cada frase é um pedido (fala mais fluida em respostas longas, gasta mais cota).
 
 ## Mecanismos de síntese
 
 | Mecanismo | Onde roda | Observações |
 |---|---|---|
-| `gemini` | Nuvem | Envia o texto de cada frase ao Google. Qualidade neural. |
-| `local` | Computador | Windows: vozes SAPI5 instaladas (as pt-BR aparecem primeiro). Linux/macOS: espeak-ng. Gratuito e offline. |
-| `auto` | — | Gemini se houver chave; se a nuvem falhar, continua pela voz local e avisa. |
-| `off` | — | Só legenda. O núcleo não simula fala. |
-
-Para uma voz local melhor no Windows, instale vozes adicionais em *Configurações → Hora e
-idioma → Fala*. Um motor neural offline (como o Piper, que tem voz pt-BR) caberia na mesma
-interface `TTSEngine`; não foi incluído porque exigiria baixar modelos.
+| `gemini` | Nuvem | Streaming; troca de modelo de voz quando um esgota a cota. |
+| `local` | Computador | Windows: vozes SAPI5 (pt-BR primeiro). Linux: espeak-ng (robótica). Gratuito e offline. |
+| `auto` | — | Gemini com chave; se a nuvem falhar antes do primeiro áudio, a frase sai pela voz local, com aviso. |
+| `off` | — | Só legenda; o núcleo não simula fala. |
 
 ## Cadeia de áudio no HUD
 
-`src/core/audio.ts`, tudo ajustável em Configurações → Áudio:
-
-1. Filtro passa-altas em 65 Hz.
-2. **Processamento "tecnológico"** (0–100 %): dobra de 13 ms filtrada em 2,4 kHz, realce de
-   presença em 2,9 kHz e de corpo em 170 Hz. Em 0 % a voz sai praticamente original.
-3. Compressor leve.
-4. **Volume** e **velocidade** (0,8× a 1,3×, preservando o tom).
-5. Analisador → saída escolhida.
-
-O analisador mede a amplitude do que está tocando; esse valor é `rig.level`, que move o glifo,
-os anéis, o feixe e a base. Não há envelope simulado fora do modo demonstração.
-
-## Fala incremental e legendas
-
-A resposta da IA chega em pedaços. O backend corta em frases completas e sintetiza cada uma
-assim que termina, para a fala começar antes do fim da resposta. Cada trecho de áudio traz o
-texto da frase; a legenda revela as palavras conforme `currentTime / duration` do áudio.
+`src/core/audio.ts`: os pedaços (PCM 16 bits, 24 kHz) e os WAVs entram em uma linha do tempo do
+Web Audio → passa-altas → processamento "tecnológico" (0–100 %) → compressor leve → volume →
+analisador → saída escolhida. O analisador mede a amplitude do que está tocando: é esse valor que
+move o glifo, os anéis, o feixe e a base. A legenda revela o texto de cada trecho conforme o
+tempo de reprodução.
 
 ## Reconhecimento de fala
 
-- **Botão de falar** (ou tecla `M`): pede o microfone, grava e encerra sozinho após cerca de
-  1 s de silêncio. Um novo clique encerra antes. O microfone é liberado ao final.
-- **Escuta contínua** (opcional, desligada por padrão): o microfone fica aberto, um detector
-  de voz por energia recorta cada fala, ela é transcrita e só vira comando se contiver a
-  palavra de ativação ("Jarvis" e grafias próximas). Falas sem a palavra são descartadas.
-- **Motores:** Gemini (nuvem — exige consentimento e mostra o selo NUVEM) ou Whisper local
-  (`pip install -r backend/requirements-whisper.txt`; não testado nesta entrega).
-- **Eco:** a captura usa cancelamento de eco, supressão de ruído e ganho automático do
-  navegador, e a escuta contínua fica bloqueada enquanto o assistente fala e por 450 ms depois.
-- **Interrupção:** botão "Parar", `Esc`, um novo comando ou o botão de falar cortam a fala e a
-  geração. Interromper apenas falando por cima só funciona pelo botão: com a escuta bloqueada
-  durante a fala, a voz do usuário não é ouvida nesse intervalo.
-- **Sem microfone:** tudo funciona por texto.
-
-Na escuta contínua com transcrição em nuvem, **toda fala detectada é enviada ao Google** para
-descobrir se contém a palavra de ativação. Para manter o áudio no computador, use o Whisper.
+- **Botão de falar** (ou `M`): pede o microfone, grava e encerra após ~1 s de silêncio.
+- **Escuta contínua:** **desligada por padrão**. Ligada, só vira comando a frase que contém
+  "Jarvis" (e grafias próximas); o "Jarvis" é removido do comando.
+- **Transcrição:** `gemini-3.5-transcribe` (modelo dedicado da sua conta) ou, se indisponível, o
+  modelo de conversa. O HUD pede autorização antes do primeiro envio e mostra
+  **NUVEM · ÁUDIO ENVIADO AO GEMINI** enquanto grava.
+- **Atenção:** na escuta contínua com transcrição na nuvem, **toda fala detectada é enviada** para
+  checar se contém "Jarvis", e cada envio gasta cota. Para manter o áudio no computador, use o
+  Whisper local (`pip install -r backend\requirements-whisper.txt`, não testado nesta versão).
+- **Eco:** cancelamento de eco do navegador; a escuta fica bloqueada enquanto o assistente fala.
+- **Interromper:** botão "Parar", `Esc`, novo comando ou o botão de falar.
 
 ## Gemini Live API
 
-A Live API oferece conversa por áudio em tempo real, com detecção de turno e interrupção
-nativas. Não foi integrada porque não pude testá-la nem consultar a documentação atual, e
-porque ela muda o desenho: o áudio vai direto ao modelo, e o registro de ferramentas, as
-legendas e a medição de amplitude precisam ser religados a esse fluxo. O caminho previsto é um
-novo `AIProvider` de sessão contínua que reutilize `ToolRegistry` e o protocolo de eventos
-atual. Enquanto isso, a latência depende de três chamadas em sequência (transcrever, responder,
-sintetizar por frase).
+A conta oferece `gemini-3.8-live` e `gemini-3.1-flash-live-preview`. A Live API faria conversa por
+voz contínua, com interrupção falando por cima e sem as três etapas atuais (transcrever, responder,
+sintetizar). Fica para a 0.3: exige um provedor de sessão contínua que reaproveite as ferramentas
+e o protocolo atuais.

@@ -1,5 +1,22 @@
 # Evidências
 
+## Versão 0.2.1 — Gemini real (`evidence/0.2.1/`)
+
+Geradas em 12/11/2026 com a chave Gemini do usuário (nível gratuito). Chromium headless, 1280×720.
+O "microfone" foi um arquivo com a fala "Jarvis, que horas são?" gerada pelo Gemini TTS:
+transcrição, resposta e voz foram reais; o microfone físico não foi testado.
+
+| Arquivo | O que mostra |
+|---|---|
+| `01-repouso-dados-reais.jpg` | Selo "IA GEMINI"; relógio de Itumbiara; sistema real; clima "sem dados" (o Open-Meteo recusou o IP compartilhado desta nuvem). |
+| `02-falando-audio-real.jpg` | Resposta do Gemini falada em streaming; glifo movido pela amplitude real. |
+| `03-ouvindo-microfone.jpg` | Gravação com "MICROFONE CAPTURANDO" e "NUVEM · ÁUDIO ENVIADO AO GEMINI"; glifo seguindo o volume captado. |
+| `04-resposta-a-fala.jpg` | Fala transcrita ("Jarvis, que horas são?") e respondida. |
+| `05-palavra-de-ativacao.jpg` | Escuta contínua: "que horas são?" virou comando sem o "Jarvis". |
+| `06-configuracoes.jpg` | Painel com modelo escolhido por teste, cotas esgotadas e latência medida. |
+| `validacao-real.md` | Saída do `validar_gemini.py`: SDK, erros, modelos da conta, conversa, ferramentas, vozes, transcrição, latência. |
+| `vozes/*.mp3` | Amostras reais para comparar (ver `docs/VOZ_JARVIS.md`). |
+
 ## Versão 0.2 — assistente real (`evidence/0.2/`)
 
 Geradas por `npm run e2e` com o backend real em execução, **sem chave do Gemini** (modo local).

@@ -1,4 +1,4 @@
-# Arquitetura — JARVIS Core 0.2
+# Arquitetura — JARVIS Core 0.2.1
 
 O JARVIS OS tem duas partes que rodam no mesmo computador:
 
@@ -34,13 +34,13 @@ recebe: ele só conhece um token de sessão local.
 | `app/config.py` | Lê `backend/.env`. Localização padrão: Itumbiara-GO, `America/Sao_Paulo`, pt-BR. |
 | `app/assistant.py` | `Assistant` (orquestrador) e `Connection` (um HUD conectado): turno de conversa, fila de fala, confirmação, voz do usuário. |
 | `app/ai/base.py` | Contratos: `AIProvider`, `ChatSession`, `ToolCall`, `ToolOutcome`, `AIError`. |
-| `app/ai/gemini_provider.py` | SDK `google-genai`: streaming, function calling manual, retry/fallback, tradução de erros, escolha de modelo. |
+| `app/ai/gemini_provider.py` | SDK `google-genai` (API `v1beta`): descoberta dos modelos da conta, teste de resposta, streaming, function calling manual, nível de raciocínio por modelo, troca de modelo em falha, cotas lidas do erro 429 e lembradas em `data/gemini_state.json`. |
 | `app/ai/local_provider.py` | Modo sem IA: poucas palavras-chave → mesmas ferramentas reais → frases fixas. |
 | `app/ai/persona.py` | Instrução de sistema (personalidade e regras de honestidade). |
 | `app/ai/tools.py` | Catálogo de ferramentas, validação estrita de argumentos, execução. |
-| `app/voice/tts.py` | `TTSEngine`: `GeminiTTS`, `LocalTTS` (SAPI5/espeak-ng); `VoiceOutput` escolhe e faz fallback. |
-| `app/voice/stt.py` | `STTEngine`: `GeminiSTT`, `WhisperSTT`; palavra de ativação. |
-| `app/voice/audio_stream.py` | WAV, nível RMS, divisão do texto em frases, limpeza de marcação. |
+| `app/voice/tts.py` | `TTSEngine`: `GeminiTTS` (streaming, direção de estilo em `speech_metadata.style`, troca de modelo de voz), `LocalTTS` (SAPI5/espeak-ng); `VoiceOutput` escolhe e faz fallback. |
+| `app/voice/stt.py` | `STTEngine`: `GeminiSTT` (modelo dedicado de transcrição quando a conta tem), `WhisperSTT`; palavra de ativação. |
+| `app/voice/audio_stream.py` | WAV, nível RMS, divisão do texto em frases, limpeza de marcação, normalização para fala (horas, unidades). |
 | `app/system/monitor.py` | CPU, RAM, discos, processos, bateria, GPU (nvidia-smi) — leituras reais. |
 | `app/system/windows.py` | `SystemController`: abrir app/pasta aprovados, volume (pycaw). Fora do Windows responde "indisponível". |
 | `app/services/weather.py` | Open-Meteo com cache, novas tentativas e marcação de dado desatualizado. |
@@ -62,7 +62,10 @@ significa escrever uma classe nova e registrá-la em `Assistant.__init__` — o 
 3. O provedor emite **texto** (repassado ao HUD como `delta`) e **pedidos de ferramenta**.
 4. Cada pedido é validado e executado por `ToolRegistry`; o resultado (`executed`, `simulated`,
    `summary`) vai para o HUD (`tool`), para o SQLite (`actions`) e de volta para a IA.
-5. Em paralelo, o texto é cortado em frases; cada frase é sintetizada e enviada como `audio`.
+5. Em paralelo, o texto é cortado em frases. No modo econômico (padrão), a primeira frase vai à
+   síntese assim que termina e o restante vai em um único pedido no fim. Cada pedido é
+   sintetizado em paralelo e entregue em ordem: em streaming (`audio_start` → `audio_chunk`… →
+   `audio_end`) ou como WAV inteiro (`audio`).
 6. `speech_done` avisa que não há mais áudio; `turn_end` fecha o turno.
 
 Se o Gemini falhar **antes** de dizer qualquer coisa (rede, cota, modelo, chave), o turno
@@ -82,8 +85,11 @@ Core → HUD:
 | `transcript` | Fala do usuário (texto digitado ou transcrito, com o motor usado). |
 | `delta` | Pedaço da resposta. |
 | `tool` | `stage: start|end`, `executed`, `simulated`, `summary`. |
-| `audio` | Uma frase: `text`, `wav` (base64), `duration`, `engine`, `voice`, `cloud`. |
-| `speech_done`, `turn_end` | Fim do áudio e do turno (`mode: ai|local`, `interrupted`, `error`). |
+| `audio_start` | Início de um trecho em streaming: `text`, `rate` (Hz), `engine`, `voice`, `model`, `cloud`. |
+| `audio_chunk` | Pedaço do trecho: `pcm` (16 bits mono little-endian, base64). |
+| `audio_end` | Fim do trecho: `duration`. |
+| `audio` | Trecho inteiro (voz local ou reserva): `text`, `wav` (base64), `duration`, `engine`, `voice`, `cloud`. |
+| `speech_done`, `turn_end` | Fim do áudio e do turno (`mode: ai|local`, `interrupted`, `error`, `timings` com 1º texto, 1ª voz e total). |
 | `error`, `notice` | Falha (`scope: ai|tts|stt`, `code`, mensagem) ou aviso. |
 | `confirm_request`, `confirm_closed` | Pedido de autorização para uma ação. |
 | `system`, `weather`, `news`, `devices` | Leituras periódicas. |
@@ -117,6 +123,6 @@ Core → HUD:
 
 ## Testes
 
-`backend/tests` (85 testes, sem rede nem chave): serviços, permissões, ferramentas, provedor
+`backend/tests` (117 testes, sem rede nem chave): serviços, permissões, ferramentas, provedor
 Gemini com cliente falso construído com os tipos do próprio SDK, orquestração, voz e API.
 `scripts/e2e.mjs` exercita o sistema inteiro em um navegador real.
