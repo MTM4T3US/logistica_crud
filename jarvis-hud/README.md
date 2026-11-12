@@ -23,6 +23,10 @@ Esta pasta é independente do CRUD de logística que está na raiz do repositór
 
 3. Abra <http://127.0.0.1:5173> no Chrome ou Edge e aperte `F` para tela cheia.
 
+Atalho: com o Node.js instalado, dê dois cliques em `INICIAR.bat`. Ele faz o `npm install`
+na primeira vez e abre o navegador. (Escrito sem acesso a uma máquina Windows — se falhar,
+use os comandos acima.)
+
 Para a versão otimizada: `npm run build` e depois `npm run preview` (porta 4173).
 
 Se o Windows estiver usando a GPU integrada, force a dedicada em
