@@ -1,0 +1,6 @@
+node_modules/
+dist/
+# Kit de referência (frames de vídeo de terceiros): uso privado, não versionar
+reference/
+evidence/comparativos/
+*.log

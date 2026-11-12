@@ -1,0 +1,61 @@
+import { useRef } from 'react'
+import { Canvas, useFrame } from '@react-three/fiber'
+import { Bloom, ChromaticAberration, EffectComposer, Noise, Vignette } from '@react-three/postprocessing'
+import * as THREE from 'three'
+import { STAGE } from './glsl'
+import { Space } from './Space'
+import { Canopy } from './Canopy'
+import { Platform } from './Platform'
+import { Core } from './Core'
+import { FaceScan } from './FaceScan'
+import { City } from './City'
+import { Director } from './Director'
+import { rig } from '../state/rig'
+import { useStore } from '../state/store'
+import { PROFILES } from '../state/quality'
+
+// Cores escritas nos shaders são os valores finais de tela (sem conversão de espaço de cor).
+THREE.ColorManagement.enabled = false
+
+/** Palco holográfico: some durante o mapa. */
+function Stage({ motes, facePoints }: { motes: number; facePoints: number }) {
+  const g = useRef<THREE.Group>(null!)
+  useFrame(() => { g.current.visible = rig.mapT < 0.5 })
+  return (
+    <group ref={g}>
+      <Canopy />
+      <Platform motes={motes} />
+      <FaceScan points={facePoints} />
+    </group>
+  )
+}
+
+export function Scene() {
+  const quality = useStore((s) => s.quality)
+  const p = PROFILES[quality]
+  return (
+    <Canvas
+      key={quality}
+      className="scene"
+      linear
+      flat
+      dpr={p.dpr}
+      gl={{ antialias: !p.post, powerPreference: 'high-performance', alpha: false, preserveDrawingBuffer: true }}
+      camera={{ fov: STAGE.camera.fov, near: 0.1, far: 4000, position: [...STAGE.camera.pos] }}
+    >
+      <Director />
+      <Space detail={1} />
+      <Stage motes={p.motes} facePoints={p.facePoints} />
+      <City blocks={p.cityBlocks} />
+      <Core />
+      {p.post && (
+        <EffectComposer multisampling={p.msaa}>
+          <Bloom mipmapBlur levels={p.bloomLevels} luminanceThreshold={0.86} luminanceSmoothing={0.18} intensity={0.95} radius={0.78} />
+          {p.aberration ? <ChromaticAberration offset={new THREE.Vector2(0.0006, 0.0006)} radialModulation={false} modulationOffset={0} /> : <></>}
+          <Noise opacity={0.035} />
+          <Vignette eskil={false} offset={0.22} darkness={0.62} />
+        </EffectComposer>
+      )}
+    </Canvas>
+  )
+}
