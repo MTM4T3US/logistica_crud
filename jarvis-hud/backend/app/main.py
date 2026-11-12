@@ -115,7 +115,7 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
     @app.post("/api/voice/sample")
     async def voice_sample(body: dict[str, Any]) -> dict[str, Any]:
         try:
-            return await core.voice_sample(str(body.get("engine", "")), body.get("voice"), body.get("text"))
+            return await core.voice_sample(str(body.get("engine", "")), body.get("voice"), body.get("text"), body.get("style"))
         except TTSError as err:
             raise HTTPException(status_code=503, detail={"code": err.code, "message": err.message}) from None
 

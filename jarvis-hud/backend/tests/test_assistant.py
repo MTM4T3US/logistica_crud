@@ -122,10 +122,14 @@ async def test_speech_is_synthesized_per_sentence_with_real_text(settings, perms
     conn = FakeConn()
     await core.run_turn(conn, "bom dia")
     audio = conn.of("audio")
-    assert [a["seq"] for a in audio] == [0, 1] and audio[0]["text"] == "**Bom dia**, senhor. Todos os sistemas estão operacionais." and audio[1]["text"] == "Em que posso ajudá-lo?"
-    assert tts.spoken == [("Bom dia, senhor. Todos os sistemas estão operacionais.", "v9"), ("Em que posso ajudá-lo?", "v9")]
+    # modo econômico (padrão): 1ª frase sozinha para a voz começar logo; o resto em UM pedido
+    assert [a["seq"] for a in audio] == [0, 1] and [a["text"] for a in audio] == ["**Bom dia**, senhor.", "Todos os sistemas estão operacionais. Em que posso ajudá-lo?"]
+    assert tts.spoken == [("Bom dia, senhor.", "v9"), ("Todos os sistemas estão operacionais. Em que posso ajudá-lo?", "v9")]
+    assert set(tts.styles_seen) == {"cinematografico"}
     assert base64.b64decode(audio[0]["wav"])[:4] == b"RIFF" and audio[0]["duration"] == 0.2 and audio[0]["cloud"] is False
     assert conn.of("speech_done")[0] == {"type": "speech_done", "turn": audio[0]["turn"], "chunks": 2, "failed": False}
+    timings = conn.of("turn_end")[0]["timings"]
+    assert 0 <= timings["first_text_s"] <= timings["first_audio_s"] <= timings["total_s"] and core.last_timings["mode"] == "ai"
     assert conn.kinds().index("speech_done") < conn.kinds().index("turn_end") and conn.of("turn_end")[0]["spoken"] is True
 
 
@@ -134,7 +138,7 @@ async def test_cloud_voice_failure_continues_with_local_voice_or_text(settings, 
     core, _ = build(settings, perms, [["Primeira frase completa aqui. Segunda frase completa aqui."]], tts={"gemini": FakeTTS("gemini", cloud=True, fail=True), "local": local})
     conn = FakeConn()
     await core.run_turn(conn, "x")
-    assert "Continuando com a voz local" in conn.of("notice")[0]["message"] and [a["engine"] for a in conn.of("audio")] == ["local", "local"]
+    assert len(conn.of("notice")) == 1 and "Continuando com a voz local" in conn.of("notice")[0]["message"] and [a["engine"] for a in conn.of("audio")] == ["local", "local"]
     core, _ = build(settings, perms, [["Uma frase completa aqui."]], tts={"gemini": FakeTTS("gemini", cloud=True, fail=True)}, runtime={"tts_engine": "gemini"})
     conn = FakeConn()
     await core.run_turn(conn, "x")
@@ -219,12 +223,105 @@ async def test_stt_unavailable_or_failing_is_reported(settings, perms):
 
 async def test_runtime_settings_are_validated_and_persisted(settings, perms):
     core, _ = build(settings, perms)
-    rt = core.update_runtime({"tts_engine": "hackear", "tts_voice_gemini": "Orus", "speak": "sim", "user_title": "  chefe ", "desconhecido": 1, "memory_enabled": True})
+    rt = core.update_runtime({"tts_engine": "hackear", "tts_voice_gemini": "Orus", "speak": "sim", "user_title": "  chefe ", "desconhecido": 1, "memory_enabled": True, "tts_style": "gritando"})
     assert rt["tts_engine"] == "auto" and rt["tts_voice_gemini"] == "Orus" and rt["speak"] is True and rt["user_title"] == "chefe" and "desconhecido" not in rt
+    assert rt["tts_style"] == "cinematografico" and core.update_runtime({"tts_style": "sobrio"})["tts_style"] == "sobrio"
+    # modelo: só entre os que a conta listou
+    assert core.update_runtime({"chat_model": "modelo-inventado"})["chat_model"] == "" and core.gemini.model == "gemini-teste"
+    assert core.update_runtime({"chat_model": "gemini-outro"})["chat_model"] == "gemini-outro" and core.gemini.model == "gemini-outro"
     assert core.runtime()["memory_enabled"] is True and "remember" in core.tools.specs()
     assert core.update_runtime({"tts_voice_gemini": "Orus; drop table"})["tts_voice_gemini"] == "Orus"
     state = await core.state()
     assert state["location"]["city"] == "Itumbiara" and state["ai"]["configured"] is True and state["voice"]["wake_word"] == "jarvis"
     assert all(d["simulated"] for d in state["devices"]) and state["news"] == {"enabled": False}
-    sample = await build(settings, perms, tts={"local": FakeTTS("local")})[0].voice_sample("local", "v1")
-    assert base64.b64decode(sample["wav"])[:4] == b"RIFF" and "Bom dia, senhor" in sample["text"]
+    engine = FakeTTS("local")
+    sampler = build(settings, perms, tts={"local": engine})[0]
+    sample = await sampler.voice_sample("local", "v1")
+    assert base64.b64decode(sample["wav"])[:4] == b"RIFF" and "Bom dia, senhor" in sample["text"] and sample["cached"] is False
+    again = await sampler.voice_sample("local", "v1")
+    assert again["cached"] is True and again["wav"] == sample["wav"] and len(engine.spoken) == 1   # repetir não sintetiza de novo
+    other = await sampler.voice_sample("local", "v1", style="sobrio")
+    assert other["cached"] is False and other["style"] == "sobrio" and len(engine.spoken) == 2
+
+
+async def test_sentences_are_synthesized_in_parallel_but_delivered_in_order(settings, perms):
+    # a 1ª frase demora mais que as outras: mesmo assim a ordem de entrega é a do texto
+    tts = FakeTTS("local", delays=[0.12, 0.0, 0.03, 0.0])
+    text = "Primeira frase bem completa aqui. Segunda frase bem completa aqui. Terceira frase bem completa aqui. Quarta frase bem completa aqui."
+    settings.tts_chunking = "frase"   # um pedido de voz por frase (para quem tem cota folgada)
+    core, _ = build(settings, perms, [[text]], tts={"local": tts})
+    conn = FakeConn()
+    started = asyncio.get_running_loop().time()
+    await core.run_turn(conn, "x")
+    elapsed = asyncio.get_running_loop().time() - started
+    audio = conn.of("audio")
+    assert [a["seq"] for a in audio] == [0, 1, 2, 3] and [a["text"].split()[0] for a in audio] == ["Primeira", "Segunda", "Terceira", "Quarta"]
+    assert 2 <= tts.max_running <= settings.tts_parallel and elapsed < 0.14   # em série levaria 0,15 s
+
+
+async def test_speech_text_is_normalized_but_subtitle_keeps_original(settings, perms):
+    tts = FakeTTS("local")
+    core, _ = build(settings, perms, [["Agora são 07:18 em Itumbiara — 22.5°C e umidade de 87%."]], tts={"local": tts})
+    conn = FakeConn()
+    await core.run_turn(conn, "x")
+    assert conn.of("audio")[0]["text"] == "Agora são 07:18 em Itumbiara — 22.5°C e umidade de 87%."
+    assert tts.spoken[0][0] == "Agora são 7 e 18 em Itumbiara, 22,5 graus e umidade de 87 por cento."
+
+
+async def test_voice_turn_reports_transcription_time(settings, perms):
+    core, _ = build(settings, perms, [["Pronto, senhor."]], stt={"whisper": FakeSTT("Jarvis, acenda a luz", engine_id="whisper")})
+    conn = FakeConn()
+    await core.handle_audio(conn, tone_wav())
+    assert "stt_s" in conn.of("turn_end")[0]["timings"] and "stt_s" not in conn.of("transcript")[0]
+
+
+async def test_economy_mode_caps_voice_requests_per_reply(settings, perms):
+    tts = FakeTTS("local")
+    long = " ".join(f"Esta é a frase número {i} da resposta longa." for i in range(1, 9))
+    core, _ = build(settings, perms, [[long]], tts={"local": tts})
+    conn = FakeConn()
+    await core.run_turn(conn, "explique")
+    assert len(tts.spoken) == 2 and tts.spoken[0][0].startswith("Esta é a frase número 1") and "número 8" in tts.spoken[1][0]
+    assert "".join(a["text"] for a in conn.of("audio")).replace(" ", "") == long.replace(" ", "")
+
+
+async def test_streamed_speech_is_sent_in_pieces_and_in_order(settings, perms):
+    # a 1ª frase demora mais para começar; mesmo assim os pedaços chegam ao HUD na ordem do texto
+    tts = FakeTTS("gemini", cloud=True, stream=True, delays=[0.09, 0.0])
+    core, _ = build(settings, perms, [["Bom dia, senhor. Todos os sistemas estão operacionais."]], tts={"gemini": tts}, runtime={"tts_speed": 1.2})
+    conn = FakeConn()
+    await core.run_turn(conn, "bom dia")
+    kinds = [(e["type"], e.get("seq")) for e in conn.events if e["type"].startswith("audio")]
+    assert kinds == [("audio_start", 0), ("audio_chunk", 0), ("audio_chunk", 0), ("audio_chunk", 0), ("audio_end", 0),
+                     ("audio_start", 1), ("audio_chunk", 1), ("audio_chunk", 1), ("audio_chunk", 1), ("audio_end", 1)]
+    first = conn.of("audio_start")[0]
+    assert first["text"] == "Bom dia, senhor." and first["rate"] == 24000 and first["cloud"] is True and first["model"] == "modelo-falso"
+    pcm = base64.b64decode(conn.of("audio_chunk")[0]["pcm"])
+    assert pcm[:2] == bytes([1, 0]) and conn.of("audio_end")[0]["duration"] == 0.3
+    assert tts.speeds == [1.2, 1.2] and conn.of("speech_done")[0]["chunks"] == 2
+    assert 0 < conn.of("turn_end")[0]["timings"]["first_audio_s"]
+
+
+async def test_stream_failing_before_audio_falls_back_to_local_voice(settings, perms):
+    cloud, local = FakeTTS("gemini", cloud=True, stream=True, fail=True), FakeTTS("local")
+    core, _ = build(settings, perms, [["Uma frase completa aqui. Outra frase completa aqui."]], tts={"gemini": cloud, "local": local})
+    conn = FakeConn()
+    await core.run_turn(conn, "x")
+    assert [e["type"] for e in conn.events if e["type"].startswith("audio")] == ["audio", "audio"]
+    assert len(conn.of("notice")) == 1 and "voz local" in conn.of("notice")[0]["message"] and len(local.spoken) == 2
+
+
+async def test_stream_cut_midway_ends_the_sentence_and_reports(settings, perms):
+    tts = FakeTTS("gemini", cloud=True, stream=True, fail_stream_after=2)
+    core, _ = build(settings, perms, [["Uma frase completa aqui."]], tts={"gemini": tts})
+    conn = FakeConn()
+    await core.run_turn(conn, "x")
+    assert [e["type"] for e in conn.events if e["type"].startswith("audio")] == ["audio_start", "audio_chunk", "audio_chunk", "audio_end"]
+    assert conn.of("error")[0]["scope"] == "tts" and conn.of("audio_end")[0]["duration"] == 0.2
+    assert conn.of("turn_end")[0]["text"] == "Uma frase completa aqui."
+
+
+async def test_speech_rate_is_validated(settings, perms):
+    core, _ = build(settings, perms)
+    assert core.update_runtime({"tts_speed": 1.15})["tts_speed"] == 1.15
+    assert core.update_runtime({"tts_speed": 3})["tts_speed"] == 1.15 and core.update_runtime({"tts_speed": "rápido"})["tts_speed"] == 1.15

@@ -1,6 +1,7 @@
 """Dublês de teste. Nenhum teste chama a API Gemini nem precisa de chave ou de rede."""
 from __future__ import annotations
 
+import asyncio
 import math
 import struct
 import sys
@@ -104,12 +105,19 @@ class ScriptedProvider(AIProvider):
         self.started: list[dict[str, Any]] = []
         self.tts_model = "tts-teste"
         self.settings = None
+        self.chosen: tuple[str | None, str | None] | None = None
+
+    def set_models(self, chat: str | None = None, tts: str | None = None) -> None:
+        self.chosen = (chat, tts)
+        if chat in ("gemini-teste", "gemini-outro"):
+            self.model = chat
 
     async def resolve_models(self) -> None:
         return None
 
     def status(self) -> dict[str, Any]:
-        return {"provider": self.name, "model": self.model, "cloud": True, "note": "", "last_error": None, "fallback_model": None, "tts_model": self.tts_model}
+        return {"provider": self.name, "model": self.model, "cloud": True, "note": "", "last_error": None, "fallback_model": None, "tts_model": self.tts_model,
+                "resolved": True, "chat_models": ["gemini-teste", "gemini-outro"], "tts_models": ["tts-teste"]}
 
     def start(self, *, system: str, history: list[dict[str, Any]], tools: list[dict[str, Any]]) -> ChatSession:
         self.started.append({"system": system, "history": history, "tools": tools})
@@ -117,9 +125,17 @@ class ScriptedProvider(AIProvider):
 
 
 class FakeTTS(TTSEngine):
-    def __init__(self, engine_id: str = "local", cloud: bool = False, fail: bool = False):
+    def __init__(self, engine_id: str = "local", cloud: bool = False, fail: bool = False, delays: list[float] | None = None,
+                 stream: bool = False, fail_stream_after: int | None = None):
         self.id, self.label, self.cloud, self.fail = engine_id, f"teste-{engine_id}", cloud, fail
         self.spoken: list[tuple[str, str | None]] = []
+        self.styles_seen: list[str | None] = []
+        self.delays = delays or []
+        self.running = 0
+        self.max_running = 0
+        self.streams = stream
+        self.fail_stream_after = fail_stream_after
+        self.speeds: list[float] = []
 
     def available(self) -> tuple[bool, str]:
         return True, ""
@@ -127,10 +143,42 @@ class FakeTTS(TTSEngine):
     def voices(self) -> list[dict[str, str]]:
         return [{"id": "v1", "label": "Voz 1"}]
 
-    async def synthesize(self, text: str, voice: str | None = None) -> TTSResult:
+    async def open_stream(self, text: str, voice: str | None = None, style: str | None = None, speed: float = 1.0):
+        from app.voice.tts import TTSStream
+
         if self.fail:
             raise TTSError("rate_limit", "O Gemini TTS atingiu o limite.")
+        index = len(self.spoken)
         self.spoken.append((text, voice))
+        self.styles_seen.append(style)
+        self.speeds.append(speed)
+        delay = self.delays[index] if index < len(self.delays) else 0
+        await asyncio.sleep(delay)
+        pieces = [bytes([index + 1, 0]) * 2400 for _ in range(3)]   # 3 pedaços de 0,1 s a 24 kHz
+        limit = self.fail_stream_after
+
+        async def rest():
+            for i, piece in enumerate(pieces[1:], start=1):
+                if limit is not None and i >= limit:
+                    raise TTSError("unavailable", "O Gemini TTS caiu no meio da frase.")
+                await asyncio.sleep(delay / 3)
+                yield piece
+
+        return TTSStream(pieces[0], rest(), 24000, self.id, voice or "v1", "modelo-falso", self.cloud)
+
+    async def synthesize(self, text: str, voice: str | None = None, style: str | None = None, speed: float = 1.0) -> TTSResult:
+        if self.fail:
+            raise TTSError("rate_limit", "O Gemini TTS atingiu o limite.")
+        index = len(self.spoken)
+        self.spoken.append((text, voice))
+        self.styles_seen.append(style)
+        self.speeds.append(speed)
+        self.running += 1
+        self.max_running = max(self.max_running, self.running)
+        try:
+            await asyncio.sleep(self.delays[index] if index < len(self.delays) else 0)
+        finally:
+            self.running -= 1
         return TTSResult(tone_wav(0.2), 0.2, self.id, voice or "v1", self.cloud)
 
 

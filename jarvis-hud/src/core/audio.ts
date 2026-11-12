@@ -1,7 +1,9 @@
 /**
  * Motor de áudio do HUD (Web Audio).
  *
- * Saída: fila de trechos de fala vindos do backend → cadeia de efeitos sutil → analisador.
+ * Saída: linha do tempo única de fala. Os trechos chegam do núcleo em streaming (PCM em
+ * pedaços, tocados assim que chegam) ou como WAV inteiro; ambos passam pela mesma cadeia de
+ * efeitos e pelo analisador.
  * O nível medido no analisador é o que move o núcleo holográfico (nada simulado).
  * Entrada: microfone (só após gesto explícito), medidor de nível, gravação em WAV 16 kHz
  * e detecção de fala para o modo de palavra de ativação.
@@ -19,10 +21,10 @@ export const liveAudio = {
 
 export interface SpeechChunk { turn: string; seq: number; text: string; wav: string; duration: number }
 
-export interface AudioPrefs { volume: number; speed: number; fx: number; inputId: string; outputId: string }
+export interface AudioPrefs { volume: number; fx: number; inputId: string; outputId: string }
 
 const PREFS_KEY = 'jarvis.audio'
-const DEFAULT_PREFS: AudioPrefs = { volume: 1, speed: 1, fx: 0.35, inputId: '', outputId: '' }
+const DEFAULT_PREFS: AudioPrefs = { volume: 1, fx: 0.35, inputId: '', outputId: '' }
 
 export function loadPrefs(): AudioPrefs {
   try {
@@ -69,6 +71,8 @@ export function encodeWav(samples: Float32Array, rate: number): Uint8Array {
 
 type MicState = 'off' | 'starting' | 'ready' | 'recording' | 'denied' | 'unavailable'
 
+interface Segment { turn: string; seq: number; text: string; start: number; end: number; open: boolean; carry: Uint8Array | null; rate?: number }
+
 interface Handlers {
   /** a fala começou (true) ou a fila esvaziou depois do fim da resposta (false) */
   onSpeaking: (speaking: boolean) => void
@@ -90,9 +94,13 @@ class AudioEngine {
   private master!: GainNode
   private analyser!: AnalyserNode
   private scope = new Float32Array(1024)
-  // fala
-  private queue: SpeechChunk[] = []
-  private current: { el: HTMLAudioElement; node: MediaElementAudioSourceNode; chunk: SpeechChunk; url: string } | null = null
+  // fala: segmentos agendados na linha do tempo do AudioContext
+  private segs: Segment[] = []
+  private sources = new Set<AudioBufferSourceNode>()
+  private playhead = 0
+  private chain: Promise<void> = Promise.resolve()
+  private generation = 0
+  private pending = 0
   private doneTurn = ''
   private silent: { text: string; start: number; dur: number } | null = null
   // microfone
@@ -152,12 +160,11 @@ class AudioEngine {
 
   private applyPrefs() {
     if (!this.ctx) return
-    const { volume, speed, fx } = this.prefs
+    const { volume, fx } = this.prefs
     this.master.gain.value = volume
     this.wet.gain.value = 0.3 * fx
     this.presence.gain.value = 3 * fx
     this.body.gain.value = 2.5 * fx
-    if (this.current) this.current.el.playbackRate = speed
   }
 
   get canChooseOutput(): boolean {
@@ -177,21 +184,101 @@ class AudioEngine {
   }
 
   // ------------------------------------------------------------------ fala do assistente
-  enqueue(chunk: SpeechChunk) {
-    this.silent = null
-    this.queue.push(chunk)
-    if (!this.current) this.next()
+  /** Executa as etapas em ordem (decodificar WAV é assíncrono); descarta o que for de antes de um stop(). */
+  private serial(fn: () => void | Promise<void>) {
+    const gen = this.generation
+    this.pending++
+    this.chain = this.chain
+      .then(() => (gen === this.generation ? fn() : undefined))
+      .catch((err) => console.error('áudio', err))
+      .finally(() => { if (gen === this.generation) this.pending-- })
   }
 
-  /** Há fala tocando ou aguardando na fila? */
+  private segment(turn: string, seq: number, text: string, open: boolean): Segment {
+    let seg = this.segs.find((g) => g.turn === turn && g.seq === seq)
+    if (!seg) {
+      seg = { turn, seq, text, start: -1, end: -1, open, carry: null }
+      this.segs.push(seg)
+    }
+    return seg
+  }
+
+  private schedule(seg: Segment, buf: AudioBuffer) {
+    const ctx = this.ensure()
+    if (ctx.state !== 'running') void ctx.resume()
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.connect(this.input)
+    // logo atrás do que já está agendado; se a rede atrasar, retoma sem sobrepor
+    const at = Math.max(this.playhead, ctx.currentTime + 0.04)
+    src.start(at)
+    this.sources.add(src)
+    src.onended = () => { this.sources.delete(src); try { src.disconnect() } catch { /* ok */ } }
+    if (seg.start < 0) seg.start = at
+    seg.end = at + buf.duration
+    this.playhead = seg.end
+    this.silent = null
+    if (!liveAudio.speaking) {
+      liveAudio.speaking = true
+      this.handlers.onSpeaking(true)
+    }
+  }
+
+  /** Início de uma frase em streaming (PCM 16 bits mono na taxa indicada). */
+  startStream(turn: string, seq: number, text: string, rate: number) {
+    this.serial(() => { const seg = this.segment(turn, seq, text, true); seg.rate = rate })
+  }
+
+  pushPcm(turn: string, seq: number, b64: string) {
+    this.serial(() => {
+      const seg = this.segment(turn, seq, '', true)
+      let bytes = b64ToBytes(b64)
+      if (seg.carry) { const joined = new Uint8Array(seg.carry.length + bytes.length); joined.set(seg.carry); joined.set(bytes, seg.carry.length); bytes = joined; seg.carry = null }
+      if (bytes.length % 2) { seg.carry = bytes.slice(-1); bytes = bytes.slice(0, -1) }
+      if (!bytes.length) return
+      const ctx = this.ensure()
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      const n = bytes.length / 2
+      const buf = ctx.createBuffer(1, n, seg.rate || 24000)
+      const data = buf.getChannelData(0)
+      for (let i = 0; i < n; i++) data[i] = view.getInt16(i * 2, true) / 32768
+      this.schedule(seg, buf)
+    })
+  }
+
+  endStream(turn: string, seq: number) {
+    this.serial(() => { const seg = this.segment(turn, seq, '', true); seg.open = false })
+  }
+
+  /** Trecho completo (WAV): voz local, amostras ou reserva quando a nuvem falha. */
+  enqueue(chunk: SpeechChunk) {
+    this.serial(async () => {
+      const ctx = this.ensure()
+      const bytes = b64ToBytes(chunk.wav)
+      let buf: AudioBuffer
+      try {
+        buf = await ctx.decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer)
+      } catch {
+        this.showText(chunk.text)
+        return
+      }
+      const seg = this.segment(chunk.turn, chunk.seq, chunk.text, false)
+      this.schedule(seg, buf)
+    })
+  }
+
+  /** Há fala tocando, agendada ou ainda chegando? */
   get active(): boolean {
-    return this.current !== null || this.queue.length > 0
+    const now = this.ctx?.currentTime ?? 0
+    return this.pending > 0 || this.segs.some((g) => g.open) || (this.playhead > now && this.sources.size > 0)
   }
 
   /** O backend avisou que não virá mais áudio desta resposta. */
   speechDone(turn: string) {
-    this.doneTurn = turn
-    if (!this.current && this.queue.length === 0 && liveAudio.speaking) this.finish()
+    this.serial(() => {
+      this.doneTurn = turn
+      if (!liveAudio.speaking && !this.segs.length) this.handlers.onSpeaking(false) // nada tocou: libera o HUD
+    })
   }
 
   /** Resposta sem áudio (voz desligada ou falha): só legenda, sem fingir fala. */
@@ -202,72 +289,23 @@ class AudioEngine {
   }
 
   stop() {
-    this.queue = []
+    this.generation++
+    this.pending = 0
+    this.chain = Promise.resolve()
+    for (const src of this.sources) { try { src.stop() } catch { /* já parado */ } }
+    this.sources.clear()
+    this.segs = []
+    this.playhead = 0
     this.silent = null
-    if (this.current) {
-      const cur = this.current
-      this.current = null
-      cur.el.pause()
-      this.release(cur)
-    }
     if (liveAudio.speaking) this.finish()
     liveAudio.subtitle = ''
     liveAudio.progress = 0
-  }
-
-  private release(cur: { el: HTMLAudioElement; node: MediaElementAudioSourceNode; url: string }) {
-    try { cur.node.disconnect() } catch { /* já desconectado */ }
-    URL.revokeObjectURL(cur.url)
-    cur.el.removeAttribute('src')
   }
 
   private finish() {
     liveAudio.speaking = false
     this.holdUntil = performance.now() + 450 // evita que o microfone capte o fim da própria fala
     this.handlers.onSpeaking(false)
-  }
-
-  private next() {
-    const chunk = this.queue.shift()
-    if (!chunk) {
-      if (this.doneTurn && liveAudio.speaking) this.finish()
-      else if (!liveAudio.speaking) this.handlers.onSpeaking(false) // nada tocou (ex.: autoplay bloqueado): libera o HUD
-      return
-    }
-    const ctx = this.ensure()
-    if (ctx.state === 'suspended') void ctx.resume()
-    const url = URL.createObjectURL(new Blob([b64ToBytes(chunk.wav).buffer as ArrayBuffer], { type: 'audio/wav' }))
-    const el = new Audio(url)
-    el.preservesPitch = true
-    el.playbackRate = this.prefs.speed
-    const node = ctx.createMediaElementSource(el)
-    node.connect(this.input)
-    const cur = { el, node, chunk, url }
-    this.current = cur
-    const advance = () => {
-      if (this.current !== cur) return
-      this.current = null
-      this.release(cur)
-      this.next()
-    }
-    el.onended = advance
-    el.onerror = advance
-    el.play().then(() => {
-      if (this.current !== cur) return
-      liveAudio.subtitle = chunk.text
-      liveAudio.progress = 0
-      if (!liveAudio.speaking) {
-        liveAudio.speaking = true
-        this.doneTurn = this.doneTurn === chunk.turn ? this.doneTurn : ''
-        this.handlers.onSpeaking(true)
-      }
-    }).catch(() => {
-      // autoplay bloqueado (sem gesto do usuário): mostra só a legenda deste trecho
-      if (this.current !== cur) return
-      this.showText([chunk.text, ...this.queue.map((c) => c.text)].join(' '))
-      this.queue = []
-      advance()
-    })
   }
 
   // ------------------------------------------------------------------ microfone
@@ -385,13 +423,25 @@ class AudioEngine {
   // ------------------------------------------------------------------ medição (chamado a cada frame)
   tick(dt: number) {
     const now = performance.now() / 1000
-    if (this.ctx && this.current) {
+    const t = this.ctx?.currentTime ?? 0
+    if (this.ctx && liveAudio.speaking) {
       this.analyser.getFloatTimeDomainData(this.scope)
       const target = toLevel(rms(this.scope), 5.5)
       liveAudio.outLevel += (target - liveAudio.outLevel) * Math.min(1, dt * (target > liveAudio.outLevel ? 30 : 9))
-      const el = this.current.el
-      const dur = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : this.current.chunk.duration
-      liveAudio.progress = dur > 0 ? Math.min(1, el.currentTime / dur) : 1
+      // legenda: o trecho que está soando agora e quanto dele já foi dito
+      let cur: Segment | undefined
+      for (const g of this.segs) if (g.start >= 0 && g.start <= t) cur = g
+      if (cur) {
+        liveAudio.subtitle = cur.text
+        const span = Math.max(0.05, cur.end - cur.start)
+        liveAudio.progress = cur.open ? Math.min(0.97, (t - cur.start) / Math.max(span, (t - cur.start) + 0.4)) : Math.min(1, (t - cur.start) / span)
+      }
+      // terminou: nada aberto, nada agendado à frente e o núcleo já avisou o fim
+      const pending = this.segs.some((g) => g.open || g.start < 0)
+      if (!pending && t >= this.playhead + 0.05 && this.doneTurn && this.segs.every((g) => g.turn === this.doneTurn)) {
+        this.segs = []
+        this.finish()
+      }
     } else {
       liveAudio.outLevel += (0 - liveAudio.outLevel) * Math.min(1, dt * 9)
     }
@@ -400,7 +450,7 @@ class AudioEngine {
       liveAudio.subtitle = this.silent.text
       liveAudio.progress = Math.min(1, k)
       if (now - this.silent.start > this.silent.dur + 3) { this.silent = null; liveAudio.subtitle = '' }
-    } else if (!this.current && !liveAudio.speaking && liveAudio.subtitle && !this.queue.length) {
+    } else if (!liveAudio.speaking && liveAudio.subtitle) {
       liveAudio.subtitle = ''
     }
     if (this.micScope) {

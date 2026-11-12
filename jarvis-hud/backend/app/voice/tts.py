@@ -17,7 +17,7 @@ import tempfile
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncIterator
 
 from google.genai import types
 
@@ -25,27 +25,78 @@ from ..ai.base import AIError
 from ..ai.gemini_provider import GeminiProvider, map_gemini_error
 from .audio_stream import parse_rate, pcm16_to_wav, wav_info
 
-#: Direção de voz enviada ao Gemini TTS junto com o texto (identidade vocal original).
-STYLE_PROMPT = (
-    "Leia o texto a seguir em português do Brasil, com dicção brasileira natural e perfeitamente compreensível. "
-    "Voz masculina adulta, registro médio-grave, timbre encorpado e elegante. Tom calmo, confiante e cortês, "
-    "como um assistente sofisticado: pronúncia clara e precisa, ritmo moderado com pausas naturais, "
-    "sem soar robótico nem teatral. Diga somente o texto, sem acrescentar nada:"
-)
+_BASE_STYLE = "Voz masculina adulta, registro médio-grave, timbre encorpado. Português do Brasil com dicção natural e clara. "
 
-#: Vozes predefinidas do Gemini TTS sugeridas para o perfil pedido. A percepção de timbre
-#: é subjetiva — compare as amostras (scripts/voice_samples.py) antes de escolher.
+#: Direções de interpretação (identidade vocal original). Vão para o Gemini TTS no campo de
+#: estilo de cada trecho (`speech_metadata.style`), separado do texto a ser dito. Validado na
+#: API real: enviar a direção junto do texto faz o modelo LER a direção em voz alta.
+STYLES: dict[str, tuple[str, str]] = {
+    "cinematografico": (
+        "Cinematográfica",
+        _BASE_STYLE + "Interpretação de assistente de inteligência artificial sofisticado: calmo, confiante e cortês, com elegância "
+        "contida e um leve toque de ironia fina. Pronúncia precisa, ritmo moderado, pausas curtas nas vírgulas e um pouco mais longas "
+        "entre as frases. Sem soar robótico, teatral ou apressado.",
+    ),
+    "sobrio": ("Sóbria", _BASE_STYLE + "Tom sereno, profissional e discreto, quase sem ênfases. Ritmo constante, pausas regulares."),
+    "caloroso": ("Calorosa", _BASE_STYLE + "Tom acolhedor e próximo, com um leve sorriso na voz, sem perder a elegância. Ritmo tranquilo."),
+    "neutro": ("Neutra (sem direção)", ""),
+}
+STYLE_PROMPT = STYLES["cinematografico"][1]
+
+
+def pace_hint(speed: float) -> str:
+    """No Gemini o ritmo é pedido na direção de estilo (mudar a velocidade de reprodução
+    alteraria o tom da voz)."""
+    if speed <= 0.9:
+        return " Ritmo bem mais lento e pausado que o normal."
+    if speed < 0.97:
+        return " Ritmo um pouco mais lento que o normal."
+    if speed >= 1.15:
+        return " Ritmo bem mais ágil que o normal, sem atropelar as palavras."
+    if speed > 1.03:
+        return " Ritmo um pouco mais ágil que o normal."
+    return ""
+
+
+def direction_for(style: str | None, default: str, speed: float = 1.0) -> str:
+    base = STYLES.get(style or default, STYLES.get(default, STYLES["cinematografico"]))[1]
+    hint = pace_hint(speed)
+    if not base and hint:
+        return hint.strip()
+    return base + hint
+
+#: Vozes predefinidas do Gemini TTS (nome → característica divulgada). A lista é a que eu
+#: conhecia ao escrever e pode ter mudado; a percepção de timbre é subjetiva — compare as
+#: amostras antes de escolher. As primeiras são as candidatas ao perfil médio-grave.
 GEMINI_VOICES: list[tuple[str, str]] = [
     ("Charon", "informativa"), ("Orus", "firme"), ("Algieba", "suave"), ("Algenib", "grave, áspera"),
     ("Iapetus", "clara"), ("Rasalgethi", "informativa"), ("Schedar", "equilibrada"), ("Sadaltager", "culta"),
     ("Alnilam", "firme"), ("Enceladus", "soprosa"), ("Gacrux", "madura"), ("Fenrir", "enérgica"), ("Puck", "animada"),
+    ("Umbriel", "tranquila"), ("Achird", "amigável"), ("Zubenelgenubi", "casual"), ("Sadachbia", "vivaz"),
+    ("Zephyr", "brilhante"), ("Kore", "firme"), ("Leda", "jovem"), ("Aoede", "leve"), ("Callirrhoe", "tranquila"),
+    ("Autonoe", "brilhante"), ("Despina", "suave"), ("Erinome", "clara"), ("Laomedeia", "animada"),
+    ("Achernar", "suave"), ("Pulcherrima", "expressiva"), ("Vindemiatrix", "gentil"), ("Sulafat", "calorosa"),
 ]
 
 
 class TTSError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, retry_after_s: float | None = None):
         super().__init__(message)
-        self.code, self.message = code, message
+        self.code, self.message, self.retry_after_s = code, message, retry_after_s
+
+
+class TTSStream:
+    """Fala em streaming: PCM 16 bits mono, entregue em pedaços conforme o modelo gera."""
+
+    def __init__(self, first: bytes, rest: AsyncIterator[bytes], rate: int, engine: str, voice: str, model: str, cloud: bool):
+        self._first, self._rest = first, rest
+        self.rate, self.engine, self.voice, self.model, self.cloud = rate, engine, voice, model, cloud
+
+    async def chunks(self) -> AsyncIterator[bytes]:
+        yield self._first
+        async for piece in self._rest:
+            if piece:
+                yield piece
 
 
 @dataclass
@@ -55,6 +106,7 @@ class TTSResult:
     engine: str
     voice: str
     cloud: bool
+    model: str = ""
 
 
 class TTSEngine(ABC):
@@ -69,18 +121,30 @@ class TTSEngine(ABC):
     def voices(self) -> list[dict[str, str]]: ...
 
     @abstractmethod
-    async def synthesize(self, text: str, voice: str | None = None) -> TTSResult: ...
+    async def synthesize(self, text: str, voice: str | None = None, style: str | None = None, speed: float = 1.0) -> TTSResult: ...
+
+    #: motores que entregam áudio em partes implementam open_stream()
+    streams = False
+
+    async def open_stream(self, text: str, voice: str | None = None, style: str | None = None, speed: float = 1.0) -> TTSStream:
+        raise TTSError("unsupported", "Este motor não faz streaming.")
+
+    def styles(self) -> list[dict[str, str]]:
+        return []
 
     def describe(self) -> dict[str, Any]:
         ok, reason = self.available()
-        return {"id": self.id, "label": self.label, "cloud": self.cloud, "available": ok, "reason": reason, "voices": self.voices() if ok else []}
+        return {"id": self.id, "label": self.label, "cloud": self.cloud, "available": ok, "reason": reason, "voices": self.voices() if ok else [], "styles": self.styles()}
 
 
 class GeminiTTS(TTSEngine):
     id, label, cloud = "gemini", "Gemini TTS (nuvem)", True
 
-    def __init__(self, provider: GeminiProvider, default_voice: str = "Charon", style: str = STYLE_PROMPT):
-        self.p, self.default_voice, self.style = provider, default_voice, style
+    def __init__(self, provider: GeminiProvider, default_voice: str = "Charon", default_style: str = "cinematografico"):
+        self.p, self.default_voice, self.default_style = provider, default_voice, default_style if default_style in STYLES else "cinematografico"
+
+    def styles(self) -> list[dict[str, str]]:
+        return [{"id": key, "label": label} for key, (label, _) in STYLES.items()]
 
     def available(self) -> tuple[bool, str]:
         return True, ""
@@ -88,28 +152,122 @@ class GeminiTTS(TTSEngine):
     def voices(self) -> list[dict[str, str]]:
         return [{"id": v, "label": f"{v} — {note}"} for v, note in GEMINI_VOICES]
 
-    async def synthesize(self, text: str, voice: str | None = None) -> TTSResult:
-        voice = voice or self.default_voice
-        config = types.GenerateContentConfig(
+    streams = True
+
+    def _config(self, voice: str) -> types.GenerateContentConfig:
+        return types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice))),
         )
-        try:
-            resp = await asyncio.wait_for(
-                self.p.client.aio.models.generate_content(model=self.p.tts_model, contents=f"{self.style}\n\n{text}", config=config),
-                timeout=self.p.settings.gemini_timeout_s,
-            )
-            part = resp.candidates[0].content.parts[0]
-            pcm, mime = part.inline_data.data, part.inline_data.mime_type or ""
-        except (AttributeError, IndexError, TypeError):
-            raise TTSError("empty", "O Gemini TTS não devolveu áudio.") from None
-        except Exception as exc:
-            err: AIError = map_gemini_error(exc)
-            raise TTSError(err.code, err.message.replace("O Gemini", "O Gemini TTS", 1)) from None
-        if not pcm:
-            raise TTSError("empty", "O Gemini TTS não devolveu áudio.")
+
+    @staticmethod
+    def _contents(text: str, direction: str, mode: str) -> Any:
+        if mode == "metadata":
+            return [types.Content(role="user", parts=[types.Part(text=text, speech_metadata=types.SpeechMetadata(style=direction))])]
+        return text  # só o texto: nunca misturamos a direção com o que deve ser dito
+
+    def _fail(self, err: AIError) -> TTSError:
+        msg = err.message.replace("O Gemini", "O Gemini TTS", 1).replace("deste modelo Gemini", "do modelo de voz")
+        return TTSError(err.code, msg, err.retry_after_s)
+
+    async def _attempts(self, text: str, voice: str, style: str | None, speed: float, call):
+        """Percorre os modelos de voz da conta e os modos de estilo até um responder.
+        `call(model, contents)` faz a requisição; cotas e indisponibilidade passam ao próximo modelo."""
+        direction = direction_for(style, self.default_style, speed)
+        await self.p.resolve_models()
+        chain = self.p.tts_chain() if hasattr(self.p, "tts_chain") else [self.p.tts_model]
+        modes: dict[str, str] = getattr(self.p, "tts_style_mode", {})
+        last = TTSError("unavailable", "Nenhum modelo de voz do Gemini respondeu.")
+        for model in chain[:3]:
+            mode = modes.get(model, "metadata") if direction else "plain"
+            while True:
+                try:
+                    result = await call(model, self._contents(text, direction, mode))
+                except TTSError as err:   # resposta sem áudio
+                    last = err
+                    break
+                except Exception as exc:
+                    err = map_gemini_error(exc)
+                    if err.code == "bad_request" and mode == "metadata":
+                        mode = modes[model] = "plain"   # este modelo não aceita o campo de estilo
+                        continue
+                    last = self._fail(err)
+                    if err.code == "rate_limit" and hasattr(self.p, "note_limit"):
+                        self.p.note_limit(model, err)
+                    if err.code in ("rate_limit", "unavailable", "timeout", "model_not_found"):
+                        break   # cota e disponibilidade são por modelo: tenta o próximo modelo de voz
+                    raise last from None
+                if direction and modes.get(model) != mode:
+                    modes[model] = mode
+                return model, result
+        raise last
+
+    async def synthesize(self, text: str, voice: str | None = None, style: str | None = None, speed: float = 1.0) -> TTSResult:
+        voice = voice or self.default_voice
+
+        async def call(model: str, contents: Any) -> tuple[bytes, str]:
+            resp = await asyncio.wait_for(self.p.client.aio.models.generate_content(model=model, contents=contents, config=self._config(voice)), timeout=self.p.settings.gemini_timeout_s)
+            try:
+                part = resp.candidates[0].content.parts[0]
+                pcm, mime = part.inline_data.data, part.inline_data.mime_type or ""
+            except (AttributeError, IndexError, TypeError):
+                raise TTSError("empty", "O Gemini TTS não devolveu áudio.") from None
+            if not pcm:
+                raise TTSError("empty", "O Gemini TTS não devolveu áudio.")
+            return pcm, mime
+
+        model, (pcm, mime) = await self._attempts(text, voice, style, speed, call)
         wav = pcm if pcm[:4] == b"RIFF" else pcm16_to_wav(pcm, parse_rate(mime))
-        return TTSResult(wav, float(wav_info(wav)["duration_s"]), self.id, voice, True)
+        return TTSResult(wav, float(wav_info(wav)["duration_s"]), self.id, voice, True, model)
+
+    async def open_stream(self, text: str, voice: str | None = None, style: str | None = None, speed: float = 1.0) -> TTSStream:
+        """Abre a síntese em streaming e só retorna quando o 1º pedaço de áudio chegou — assim
+        uma falha antes do áudio ainda pode cair para outro modelo (ou para a voz local)."""
+        voice = voice or self.default_voice
+        limit = self.p.settings.gemini_first_token_timeout_s
+
+        async def call(model: str, contents: Any) -> tuple[bytes, Any, int]:
+            stream = await asyncio.wait_for(self.p.client.aio.models.generate_content_stream(model=model, contents=contents, config=self._config(voice)), limit)
+            it = stream.__aiter__()
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(it.__anext__(), limit)
+                except StopAsyncIteration:
+                    raise TTSError("empty", "O Gemini TTS não devolveu áudio.") from None
+                data, mime = _audio_of(chunk)
+                if data:
+                    rate = parse_rate(mime)
+                    if data[:4] == b"RIFF":   # alguns modelos mandam o 1º pedaço com cabeçalho WAV
+                        rate = int(wav_info(data)["sample_rate"])
+                        data = data[44:]
+                    return data, it, rate
+
+        model, (first, it, rate) = await self._attempts(text, voice, style, speed, call)
+        timeout = self.p.settings.gemini_timeout_s
+
+        async def rest() -> AsyncIterator[bytes]:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(it.__anext__(), timeout)
+                except StopAsyncIteration:
+                    return
+                except Exception as exc:
+                    raise self._fail(map_gemini_error(exc)) from None
+                data, _ = _audio_of(chunk)
+                if data:
+                    yield data
+
+        return TTSStream(first, rest(), rate, self.id, voice, model, True)
+
+
+def _audio_of(chunk: Any) -> tuple[bytes, str]:
+    for cand in getattr(chunk, "candidates", None) or []:
+        content = getattr(cand, "content", None)
+        for part in (getattr(content, "parts", None) or []):
+            blob = getattr(part, "inline_data", None)
+            if blob is not None and blob.data:
+                return blob.data, blob.mime_type or ""
+    return b"", ""
 
 
 ESPEAK_VOICES = [("pt-br", "Português (Brasil) — padrão"), ("pt-br+m3", "Português (Brasil) — grave"), ("pt-br+m7", "Português (Brasil) — encorpada")]
@@ -160,21 +318,22 @@ class LocalTTS(TTSEngine):
         except Exception:
             return []
 
-    async def synthesize(self, text: str, voice: str | None = None) -> TTSResult:
+    async def synthesize(self, text: str, voice: str | None = None, style: str | None = None, speed: float = 1.0) -> TTSResult:
         ok, reason = self.available()
         if not ok:
             raise TTSError("unavailable", reason)
-        wav, used = await asyncio.to_thread(self._synth_blocking, text, voice)
+        wav, used = await asyncio.to_thread(self._synth_blocking, text, voice, speed)
         return TTSResult(wav, float(wav_info(wav)["duration_s"]), self.id, used, False)
 
-    def _synth_blocking(self, text: str, voice: str | None) -> tuple[bytes, str]:
+    def _synth_blocking(self, text: str, voice: str | None, speed: float = 1.0) -> tuple[bytes, str]:
+        speed = max(0.7, min(1.4, float(speed or 1.0)))
         with self._lock, tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "fala.wav")
             if self._backend == "espeak":
                 allowed = {v for v, _ in ESPEAK_VOICES}
                 used = voice if voice in allowed else "pt-br+m3"
                 try:
-                    subprocess.run([self._espeak, "-v", used, "-s", "150", "-p", "38", "-w", path, "--stdin"], input=text.encode("utf-8"), check=True, timeout=30, capture_output=True)
+                    subprocess.run([self._espeak, "-v", used, "-s", str(round(150 * speed)), "-p", "38", "-w", path, "--stdin"], input=text.encode("utf-8"), check=True, timeout=30, capture_output=True)
                 except (subprocess.SubprocessError, OSError) as exc:
                     raise TTSError("local_failed", f"O sintetizador local falhou ({type(exc).__name__}).") from None
             else:
@@ -186,7 +345,7 @@ class LocalTTS(TTSEngine):
                     used = voice if voice in known else (self.voices()[0]["id"] if self.voices() else "")
                     if used:
                         engine.setProperty("voice", used)
-                    engine.setProperty("rate", 172)
+                    engine.setProperty("rate", round(172 * speed))
                     engine.save_to_file(text, path)
                     engine.runAndWait()
                     engine.stop()

@@ -54,6 +54,21 @@ class STTEngine(ABC):
         return {"id": self.id, "label": self.label, "cloud": self.cloud, "available": ok, "reason": reason}
 
 
+def response_text(resp: Any) -> str:
+    """Texto de uma resposta de transcrição. Os modelos dedicados devolvem o resultado em
+    partes `audio_transcription` (não em `text`) — descoberto na validação com a API real."""
+    out: list[str] = []
+    for cand in getattr(resp, "candidates", None) or []:
+        content = getattr(cand, "content", None)
+        for part in (getattr(content, "parts", None) or []):
+            heard = getattr(part, "audio_transcription", None)
+            if heard is not None and getattr(heard, "text", None):
+                out.append(heard.text)
+            elif getattr(part, "text", None) and not getattr(part, "thought", False):
+                out.append(part.text)
+    return " ".join(out)
+
+
 def clean_transcript(text: str) -> str:
     text = (text or "").strip().strip('"“”')
     if re.fullmatch(r"\[?\s*sil[eê]ncio\s*\]?\.?", text, flags=re.IGNORECASE):
@@ -71,20 +86,31 @@ class GeminiSTT(STTEngine):
         return True, ""
 
     async def transcribe(self, wav: bytes, language: str = "pt-BR") -> STTResult:
-        try:
-            resp = await asyncio.wait_for(
-                self.p.client.aio.models.generate_content(
-                    model=self._model or self.p.model,
-                    contents=[types.Part.from_bytes(data=wav, mime_type="audio/wav"), TRANSCRIBE_PROMPT],
-                    config=types.GenerateContentConfig(temperature=0.0),
-                ),
-                timeout=self.p.settings.gemini_timeout_s,
-            )
-            text = resp.text or ""
-        except Exception as exc:
-            err = map_gemini_error(exc)
-            raise STTError(err.code, err.message) from None
-        return STTResult(clean_transcript(text), self.id, True)
+        if hasattr(self.p, "resolve_models"):
+            await self.p.resolve_models()
+        first = self._model or getattr(self.p, "stt_model", None) or self.p.model
+        others = [m for m in (self.p.failover_chain() if hasattr(self.p, "failover_chain") else []) if m != first]
+        cooling = getattr(self.p, "cooling", lambda _m: False)
+        chain = [m for m in [first, *others] if not cooling(m)] or [first]
+        last = STTError("unavailable", "Nenhum modelo do Gemini transcreveu o áudio.")
+        audio = types.Part.from_bytes(data=wav, mime_type="audio/wav")
+        for model in chain[:3]:
+            # modelos dedicados ("transcribe") recebem só o áudio; os de conversa, áudio + instrução
+            contents = [audio] if "transcribe" in model else [audio, TRANSCRIBE_PROMPT]
+            try:
+                resp = await asyncio.wait_for(
+                    self.p.client.aio.models.generate_content(model=model, contents=contents, config=types.GenerateContentConfig(temperature=0.0)),
+                    timeout=self.p.settings.gemini_timeout_s,
+                )
+                return STTResult(clean_transcript(response_text(resp)), self.id, True)
+            except Exception as exc:
+                err = map_gemini_error(exc)
+                last = STTError(err.code, err.message)
+                if err.code == "rate_limit" and hasattr(self.p, "note_limit"):
+                    self.p.note_limit(model, err)
+                if err.code not in ("rate_limit", "unavailable", "timeout", "model_not_found"):
+                    break
+        raise last
 
 
 class WhisperSTT(STTEngine):

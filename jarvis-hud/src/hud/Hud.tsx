@@ -25,7 +25,7 @@ function Badge() {
   const where = conn === 'online' ? (ai?.mode === 'ai' ? `NÚCLEO ONLINE · IA ${ai.provider.toUpperCase()}` : 'NÚCLEO ONLINE · MODO LOCAL (SEM IA)') : conn === 'connecting' ? 'CONECTANDO AO NÚCLEO…' : 'NÚCLEO OFFLINE'
   return (
     <div className="badge">
-      JARVIS OS 0.2 · {where}
+      JARVIS OS 0.2.1 · {where}
       {demo && <b className="demo">DEMO · DADOS SIMULADOS</b>}
     </div>
   )

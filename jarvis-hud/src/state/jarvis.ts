@@ -10,12 +10,18 @@ export interface WeatherData {
 }
 export interface SystemData { cpu_percent: number; ram_percent: number; disk_percent: number; disk_free_gb: number; ram_used_gb: number; ram_total_gb: number; platform: string }
 export interface DeviceData { id: string; name: string; kind: string; transport: string; simulated: boolean; connected: boolean; state: Record<string, unknown> }
-export interface EngineInfo { id: string; label: string; cloud: boolean; available: boolean; reason: string; voices?: { id: string; label: string }[] }
+export interface EngineInfo { id: string; label: string; cloud: boolean; available: boolean; reason: string; voices?: { id: string; label: string }[]; styles?: { id: string; label: string }[] }
+export interface Probe { ok: boolean; first_s: number | null; thinking: string | null; error: string | null }
+export interface Timings { first_text_s?: number; first_audio_s?: number; total_s?: number; stt_s?: number; mode?: string }
 export interface CoreState {
   version: string
-  ai: { configured: boolean; mode: 'ai' | 'local'; provider: string; model: string; note?: string; last_error?: { code: string; message?: string } | null }
+  ai: {
+    configured: boolean; mode: 'ai' | 'local'; provider: string; model: string; note?: string; last_error?: { code: string; message?: string } | null
+    tts_model?: string; stt_model?: string; chat_models?: string[]; tts_models?: string[]; probes?: Record<string, Probe>; limited?: string[]; thinking?: string | null; resolved?: boolean
+  }
+  timings?: Timings | null
   location: { city: string; state: string; state_code: string; country: string; timezone: string; language: string }
-  runtime: { tts_engine: string; tts_voice_gemini: string; tts_voice_local: string; stt_engine: string; speak: boolean; memory_enabled: boolean; cloud_audio_consent: boolean; user_title: string }
+  runtime: { tts_engine: string; tts_voice_gemini: string; tts_voice_local: string; tts_style: string; stt_engine: string; speak: boolean; memory_enabled: boolean; cloud_audio_consent: boolean; user_title: string; chat_model: string; tts_model: string; tts_speed: number }
   voice: { tts_engines: EngineInfo[]; stt_engines: EngineInfo[]; tts_active: string | null; tts_cloud: boolean; stt_active: string | null; stt_cloud: boolean; wake_word: string }
   permissions: { source: string; apps: { id: string; name: string }[]; folders: { id: string; name: string }[]; routines: { id: string; name: string }[] }
   system_actions: { platform: string; open_app: boolean; open_folder: boolean; volume: boolean }
@@ -134,6 +140,16 @@ export function handleEvent(ev: Record<string, any>) {
       gotAudio = true
       audio.enqueue({ turn: ev.turn, seq: ev.seq, text: ev.text, wav: ev.wav, duration: ev.duration })
       break
+    case 'audio_start':
+      gotAudio = true
+      audio.startStream(ev.turn, ev.seq, ev.text, ev.rate)
+      break
+    case 'audio_chunk':
+      audio.pushPcm(ev.turn, ev.seq, ev.pcm)
+      break
+    case 'audio_end':
+      audio.endStream(ev.turn, ev.seq)
+      break
     case 'speech_done':
       audio.speechDone(ev.turn)
       break
@@ -141,7 +157,7 @@ export function handleEvent(ev: Record<string, any>) {
       const last = J().lines[J().lines.length - 1]
       if (last?.role === 'assistant' && last.partial) patchLast('assistant', (l) => ({ ...l, text: ev.text || l.text, partial: false, mode: ev.mode, interrupted: ev.interrupted }))
       const core = J().core
-      useJarvis.setState({ busy: false, activity: '', core: core ? { ...core, ai: ev.ai } : core })
+      useJarvis.setState({ busy: false, activity: '', core: core ? { ...core, ai: ev.ai, timings: ev.text && !ev.interrupted ? { ...ev.timings, mode: ev.mode } : core.timings } : core })
       if (ev.interrupted) { audio.stop(); settle(); break }
       if (!gotAudio && ev.text) audio.showText(ev.text) // sem voz: só a legenda, o núcleo não finge fala
       // com áudio na fila, quem devolve o HUD ao repouso é o fim da reprodução

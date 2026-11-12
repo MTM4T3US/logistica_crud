@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
+import time
 import uuid
 from typing import Any
 
@@ -23,11 +25,11 @@ from .services.news import NewsService
 from .services.weather import WeatherService
 from .system.monitor import SystemMonitor
 from .system.windows import SystemController, get_controller
-from .voice.audio_stream import SentenceChunker, speakable, wav_info, wav_rms
+from .voice.audio_stream import SentenceChunker, normalize_for_speech, speakable, wav_info, wav_rms
 from .voice.stt import GeminiSTT, STTError, VoiceInput, WhisperSTT, extract_wake_command
-from .voice.tts import GeminiTTS, LocalTTS, TTSEngine, TTSError, VoiceOutput
+from .voice.tts import STYLES, GeminiTTS, LocalTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 MAX_TOOL_ROUNDS = 6
 CONFIRM_TIMEOUT_S = 45.0
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -100,24 +102,32 @@ class Assistant:
         self.news = news or NewsService(settings.news_rss_url)
         self.gemini = gemini if gemini is not None else (GeminiProvider(settings) if settings.ai_configured else None)
         self.local = LocalProvider(self.perms)
-        self.tts = tts or VoiceOutput(GeminiTTS(self.gemini, settings.tts_voice) if self.gemini else None, LocalTTS())
+        self.tts = tts or VoiceOutput(GeminiTTS(self.gemini, settings.tts_voice, settings.tts_style) if self.gemini else None, LocalTTS())
         self.stt = stt or VoiceInput(GeminiSTT(self.gemini, settings.gemini_stt_model) if self.gemini else None, WhisperSTT(settings.whisper_model))
         self.tools = ToolRegistry(
             settings=settings, perms=self.perms, monitor=self.monitor, controller=self.controller, devices=self.devices,
             weather=self.weather, news=self.news, memory=self.memory, memory_enabled=lambda: bool(self.runtime()["memory_enabled"]),
         )
         self.last_ai_error: dict[str, str] | None = None
+        self.last_timings: dict[str, float] | None = None
 
     async def startup(self) -> None:
         if self.gemini:
             await self.gemini.resolve_models()
+            self._apply_models(self.runtime())
+
+    def _apply_models(self, rt: dict[str, Any]) -> None:
+        """Reaplica a escolha de modelo feita no painel (só vale se a conta lista o modelo)."""
+        if self.gemini and hasattr(self.gemini, "set_models"):
+            self.gemini.set_models(rt.get("chat_model") or None, rt.get("tts_model") or None)
 
     # ------------------------------------------------------------------ ajustes
     def runtime(self) -> dict[str, Any]:
         s = self.settings
         defaults = {
-            "tts_engine": s.tts_engine, "tts_voice_gemini": s.tts_voice, "tts_voice_local": "", "stt_engine": s.stt_engine,
-            "speak": True, "memory_enabled": s.memory_enabled, "cloud_audio_consent": False, "user_title": "senhor",
+            "tts_engine": s.tts_engine, "tts_voice_gemini": s.tts_voice, "tts_voice_local": "", "tts_style": s.tts_style if s.tts_style in STYLES else "cinematografico",
+            "stt_engine": s.stt_engine, "speak": True, "memory_enabled": s.memory_enabled, "cloud_audio_consent": False, "user_title": "senhor",
+            "chat_model": "", "tts_model": "", "tts_speed": 1.0,
         }
         saved = self.memory.get_setting("runtime", {}) or {}
         return {**defaults, **{k: v for k, v in saved.items() if k in defaults}}
@@ -129,14 +139,20 @@ class Assistant:
             "stt_engine": lambda v: v in {"auto", "gemini", "whisper", "off"},
             "tts_voice_gemini": lambda v: isinstance(v, str) and 0 < len(v) <= 40 and v.replace("-", "").replace("_", "").isalnum(),
             "tts_voice_local": lambda v: isinstance(v, str) and len(v) <= 300,
+            "tts_style": lambda v: v in STYLES,
+            "tts_speed": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0.8 <= float(v) <= 1.3,
+            "chat_model": lambda v: isinstance(v, str) and (v == "" or (self.gemini is not None and v in self.gemini.status().get("chat_models", []))),
+            "tts_model": lambda v: isinstance(v, str) and (v == "" or (self.gemini is not None and v in self.gemini.status().get("tts_models", []))),
             "speak": lambda v: isinstance(v, bool), "memory_enabled": lambda v: isinstance(v, bool),
             "cloud_audio_consent": lambda v: isinstance(v, bool),
             "user_title": lambda v: isinstance(v, str) and 0 < len(v.strip()) <= 24,
         }
         for key, value in patch.items():
             if key in rules and rules[key](value):
-                rt[key] = value.strip() if key == "user_title" else value
+                rt[key] = value.strip() if key == "user_title" else round(float(value), 2) if key == "tts_speed" else value
         self.memory.set_setting("runtime", rt)
+        if "chat_model" in patch or "tts_model" in patch:
+            self._apply_models(rt)
         return rt
 
     def _voice_for(self, engine: TTSEngine, rt: dict[str, Any]) -> str | None:
@@ -158,6 +174,7 @@ class Assistant:
         return {
             "version": VERSION,
             "ai": self.ai_status(),
+            "timings": self.last_timings,
             "location": {"city": loc.city, "state": loc.state, "state_code": loc.state_code, "country": loc.country, "timezone": loc.timezone, "language": loc.language, "latitude": loc.latitude, "longitude": loc.longitude},
             "runtime": rt,
             "voice": {
@@ -182,15 +199,30 @@ class Assistant:
     async def run_turn(self, conn: Connection, text: str, source: str = "text", stt: dict[str, Any] | None = None) -> None:
         turn = uuid.uuid4().hex[:10]
         text = text.strip()[:4000]
-        await conn.send({"type": "transcript", "role": "user", "text": text, "source": source, **(stt or {})})
+        marks: dict[str, float] = {"t0": time.monotonic()}
+        await conn.send({"type": "transcript", "role": "user", "text": text, "source": source, **{k: v for k, v in (stt or {}).items() if k != "stt_s"}})
         await asyncio.to_thread(self.memory.add_message, "user", text, {"source": source})
         await conn.send({"type": "phase", "phase": "thinking", "turn": turn})
 
         rt = self.runtime()
         speak = bool(rt["speak"]) and self.tts.resolve(rt["tts_engine"]) is not None
         queue: asyncio.Queue[str | None] = asyncio.Queue()
-        speaker = asyncio.create_task(self._speak_worker(conn, turn, queue, rt)) if speak else None
+        speaker = asyncio.create_task(self._speak_worker(conn, turn, queue, rt, marks)) if speak else None
         chunker = SentenceChunker()
+        # modo econômico (padrão): a 1ª frase é sintetizada na hora e TODO o restante vira um
+        # único pedido de voz ao final — no máximo 2 requisições por resposta, por causa das cotas
+        economy = self.settings.tts_chunking != "frase"
+        held: list[str] = []
+        spoken_first = False
+
+        def queue_speech(sentence: str) -> None:
+            nonlocal spoken_first
+            if not economy or not spoken_first:
+                spoken_first = True
+                queue.put_nowait(sentence)
+            else:
+                held.append(sentence)
+
         said: list[str] = []
         tool_log: list[dict[str, Any]] = []
         used: dict[str, str] = {"provider": "", "model": "", "mode": ""}
@@ -207,10 +239,11 @@ class Assistant:
                 calls = []
                 async for ev in stream:
                     if isinstance(ev, str):
+                        marks.setdefault("first_text", time.monotonic())
                         said.append(ev)
                         await conn.send({"type": "delta", "turn": turn, "text": ev})
                         for sentence in chunker.feed(ev):
-                            queue.put_nowait(sentence)
+                            queue_speech(sentence)
                     else:
                         calls.append(ev)
                 if not calls:
@@ -249,7 +282,9 @@ class Assistant:
                     self.local.reason = f"Gemini indisponível: {err.code}"
                     await conn.send({"type": "notice", "message": "Continuando em modo local, sem IA."})
             for sentence in chunker.flush():
-                queue.put_nowait(sentence)
+                queue_speech(sentence)
+            if held:
+                queue.put_nowait(" ".join(held))
             queue.put_nowait(None)
             if speaker:
                 await speaker
@@ -262,52 +297,138 @@ class Assistant:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await speaker
             reply = "".join(said).strip()
+            t0 = marks["t0"]
+            timings = {k: round(marks[src] - t0, 2) for k, src in (("first_text_s", "first_text"), ("first_audio_s", "first_audio")) if src in marks}
+            timings["total_s"] = round(time.monotonic() - t0, 2)
+            if stt and "stt_s" in stt:
+                timings["stt_s"] = stt["stt_s"]
+            if not interrupted and reply:
+                self.last_timings = {**timings, "mode": used["mode"]}
             if reply or tool_log:
-                meta = {"provider": used["provider"], "model": used["model"], "tools": tool_log, "interrupted": interrupted}
+                meta = {"provider": used["provider"], "model": used["model"], "tools": tool_log, "interrupted": interrupted, "timings": timings}
                 with contextlib.suppress(Exception):
                     await asyncio.shield(asyncio.to_thread(self.memory.add_message, "assistant", reply, meta))
             with contextlib.suppress(Exception):
                 await asyncio.shield(conn.send({
                     "type": "turn_end", "turn": turn, "text": reply, "provider": used["provider"], "model": used["model"], "mode": used["mode"],
                     "spoken": speak, "interrupted": interrupted, "error": {"code": error.code, "message": error.message} if error else None,
-                    "ai": self.ai_status(),
+                    "ai": self.ai_status(), "timings": timings,
                 }))
 
-    async def _speak_worker(self, conn: Connection, turn: str, queue: "asyncio.Queue[str | None]", rt: dict[str, Any]) -> None:
-        engine = self.tts.resolve(rt["tts_engine"])
-        seq, failed = 0, False
-        try:
+    async def _speak_worker(self, conn: Connection, turn: str, queue: "asyncio.Queue[str | None]", rt: dict[str, Any], marks: dict[str, float] | None = None) -> None:
+        """Sintetiza as frases em paralelo (até `tts_parallel`) e entrega ao HUD na ordem.
+
+        Motores com streaming (Gemini) mandam o áudio em pedaços assim que chegam:
+        `audio_start` → `audio_chunk`… → `audio_end`. Os demais mandam um WAV inteiro (`audio`).
+        Se a nuvem falhar antes do 1º pedaço, a frase sai pela voz local (modo automático)."""
+        state: dict[str, Any] = {"engine": self.tts.resolve(rt["tts_engine"]), "failed": False, "switch": None}
+        limit = asyncio.Semaphore(max(1, self.settings.tts_parallel))
+        ordered: asyncio.Queue[tuple[str, asyncio.Queue] | None] = asyncio.Queue()
+        tasks: list[asyncio.Task] = []
+        style, speed = rt.get("tts_style"), float(rt.get("tts_speed", 1.0))
+
+        async def whole(engine: TTSEngine, spoken: str) -> TTSResult:
+            try:
+                return await engine.synthesize(spoken, self._voice_for(engine, rt), style, speed)
+            except TTSError as err:
+                fallback = self.tts.fallback_for(engine, rt["tts_engine"])
+                if fallback is None:
+                    raise
+                if state["engine"] is engine:  # a 1ª falha troca o motor das próximas frases
+                    state["engine"], state["switch"] = fallback, err
+                return await fallback.synthesize(spoken, self._voice_for(fallback, rt), style, speed)
+
+        async def job(spoken: str, out: asyncio.Queue) -> None:
+            try:
+                async with limit:
+                    engine: TTSEngine | None = state["engine"]
+                    if engine is None or state["failed"]:
+                        return
+                    if not engine.streams:
+                        await out.put(("wav", await whole(engine, spoken)))
+                        return
+                    try:
+                        stream = await engine.open_stream(spoken, self._voice_for(engine, rt), style, speed)
+                    except TTSError as err:
+                        fallback = self.tts.fallback_for(engine, rt["tts_engine"])
+                        if fallback is None:
+                            raise
+                        if state["engine"] is engine:
+                            state["engine"], state["switch"] = fallback, err
+                        await out.put(("wav", await whole(fallback, spoken)))
+                        return
+                    await out.put(("start", stream))
+                    try:
+                        async for pcm in stream.chunks():
+                            await out.put(("chunk", pcm))
+                    except TTSError as err:
+                        await out.put(("cut", err))   # o áudio já começou: encerra a frase onde parou
+            except TTSError as err:
+                await out.put(("error", err))
+            finally:
+                await out.put(("end", None))
+
+        async def produce() -> None:
             while True:
                 sentence = await queue.get()
                 if sentence is None:
                     break
-                spoken = speakable(sentence)
-                if engine is None or failed or not spoken:
-                    continue
-                result = None
-                try:
-                    result = await engine.synthesize(spoken, self._voice_for(engine, rt))
-                except TTSError as err:
-                    fallback = self.tts.fallback_for(engine, rt["tts_engine"])
-                    if fallback:
+                spoken = normalize_for_speech(speakable(sentence))
+                if spoken:
+                    out: asyncio.Queue = asyncio.Queue()
+                    tasks.append(asyncio.create_task(job(spoken, out)))
+                    await ordered.put((sentence, out))
+            await ordered.put(None)
+
+        def first_audio() -> None:
+            if marks is not None:
+                marks.setdefault("first_audio", time.monotonic())
+
+        producer = asyncio.create_task(produce())
+        seq = 0
+        try:
+            while True:
+                item = await ordered.get()
+                if item is None:
+                    break
+                sentence, out = item
+                live: dict[str, Any] | None = None
+                while True:
+                    kind, value = await out.get()
+                    if state["switch"] is not None:
+                        err, state["switch"] = state["switch"], None
                         await conn.send({"type": "notice", "message": f"{err.message} Continuando com a voz local."})
-                        engine = fallback
-                        try:
-                            result = await engine.synthesize(spoken, self._voice_for(engine, rt))
-                        except TTSError as err2:
-                            err = err2
-                    if result is None:
-                        failed = True
-                        await conn.send({"type": "error", "scope": "tts", "code": err.code, "message": err.message})
-                if result is not None:
-                    await conn.send({
-                        "type": "audio", "turn": turn, "seq": seq, "text": sentence, "duration": round(result.duration_s, 3),
-                        "engine": result.engine, "voice": result.voice, "cloud": result.cloud, "wav": base64.b64encode(result.wav).decode("ascii"),
-                    })
+                    if kind == "end":
+                        break
+                    if kind == "start":
+                        live = {"rate": value.rate, "bytes": 0}
+                        await conn.send({"type": "audio_start", "turn": turn, "seq": seq, "text": sentence, "rate": value.rate, "engine": value.engine,
+                                         "voice": value.voice, "model": value.model, "cloud": value.cloud})
+                    elif kind == "chunk" and live is not None:
+                        first_audio()
+                        live["bytes"] += len(value)
+                        await conn.send({"type": "audio_chunk", "turn": turn, "seq": seq, "pcm": base64.b64encode(value).decode("ascii")})
+                    elif kind == "cut":
+                        await conn.send({"type": "error", "scope": "tts", "code": value.code, "message": value.message})
+                    elif kind == "wav":
+                        first_audio()
+                        await conn.send({
+                            "type": "audio", "turn": turn, "seq": seq, "text": sentence, "duration": round(value.duration_s, 3),
+                            "engine": value.engine, "voice": value.voice, "model": value.model, "cloud": value.cloud, "wav": base64.b64encode(value.wav).decode("ascii"),
+                        })
+                        seq += 1
+                    elif kind == "error" and not state["failed"]:
+                        state["failed"] = True
+                        await conn.send({"type": "error", "scope": "tts", "code": value.code, "message": value.message})
+                if live is not None:
+                    await conn.send({"type": "audio_end", "turn": turn, "seq": seq, "duration": round(live["bytes"] / 2 / live["rate"], 3)})
                     seq += 1
         finally:
+            producer.cancel()
+            for task in tasks:
+                task.cancel()
             with contextlib.suppress(Exception):
-                await asyncio.shield(conn.send({"type": "speech_done", "turn": turn, "chunks": seq, "failed": failed}))
+                await asyncio.shield(conn.send({"type": "speech_done", "turn": turn, "chunks": seq, "failed": state["failed"]}))
 
     # ------------------------------------------------------------------ voz do usuário
     async def handle_audio(self, conn: Connection, wav: bytes, mode: str = "ptt") -> None:
@@ -332,10 +453,12 @@ class Assistant:
             await conn.send({"type": "stt_empty", "reason": "silêncio"})
             return await conn.send({"type": "phase", "phase": "idle"})
         await conn.send({"type": "phase", "phase": "transcribing", "engine": engine.id, "cloud": engine.cloud})
+        started = time.monotonic()
         try:
             result = await engine.transcribe(wav, self.settings.location.language)
         except STTError as err:
             return await fail(err.code, err.message)
+        stt_s = round(time.monotonic() - started, 2)
         text = result.text
         if not text:
             await conn.send({"type": "stt_empty", "reason": "sem fala"})
@@ -347,11 +470,30 @@ class Assistant:
                 await conn.send({"type": "wake_ignored"})
                 return await conn.send({"type": "phase", "phase": "idle"})
             text, source = command or "Jarvis?", "wake"
-        await self.run_turn(conn, text, source, {"engine": result.engine, "cloud": result.cloud})
+        await self.run_turn(conn, text, source, {"engine": result.engine, "cloud": result.cloud, "stt_s": stt_s})
 
-    async def voice_sample(self, engine_id: str, voice: str | None, text: str | None = None) -> dict[str, Any]:
+    async def voice_sample(self, engine_id: str, voice: str | None, text: str | None = None, style: str | None = None) -> dict[str, Any]:
+        """Amostra para ouvir e comparar no painel. Fica em cache local: ouvir de novo a mesma
+        combinação não gasta outra chamada à nuvem."""
         engine = self.tts.engines.get(engine_id)
         if engine is None or not engine.available()[0]:
             raise TTSError("unavailable", "Este motor de voz não está disponível.")
-        result = await engine.synthesize(speakable(text or SAMPLE_TEXT)[:300], voice or None)
-        return {"engine": result.engine, "voice": result.voice, "cloud": result.cloud, "duration": round(result.duration_s, 3), "text": text or SAMPLE_TEXT, "wav": base64.b64encode(result.wav).decode("ascii")}
+        phrase = speakable(text or SAMPLE_TEXT)[:300]
+        style = style if style in STYLES else self.runtime()["tts_style"]
+        speed = float(self.runtime().get("tts_speed", 1.0))
+        model = getattr(self.gemini, "tts_model", "") if engine_id == "gemini" else ""
+        key = hashlib.sha1(f"{engine_id}|{model}|{voice}|{style}|{speed}|{phrase}".encode()).hexdigest()[:20]
+        cache = self.settings.db_path.parent / "voice_cache" if str(self.settings.db_path) != ":memory:" else None
+        path = cache / f"{key}.wav" if cache else None
+        cached = bool(path and path.exists())
+        if cached:
+            wav = await asyncio.to_thread(path.read_bytes)
+            used, duration = voice or "", float(wav_info(wav)["duration_s"])
+        else:
+            result = await engine.synthesize(normalize_for_speech(phrase), voice or None, style, speed)
+            wav, used, duration = result.wav, result.voice, result.duration_s
+            if path:
+                with contextlib.suppress(OSError):
+                    cache.mkdir(parents=True, exist_ok=True)
+                    await asyncio.to_thread(path.write_bytes, wav)
+        return {"engine": engine_id, "voice": used, "style": style, "cloud": engine.cloud, "cached": cached, "duration": round(duration, 3), "text": phrase, "wav": base64.b64encode(wav).decode("ascii")}

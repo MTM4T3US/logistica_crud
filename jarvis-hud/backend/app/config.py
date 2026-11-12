@@ -52,17 +52,28 @@ class Location:
 class Settings:
     # --- IA (desabilitada enquanto não houver chave) ---
     gemini_api_key: str | None = field(default=None, repr=False)  # nunca aparece em logs/repr
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "auto"  # auto = escolhe entre os modelos que a conta lista
     gemini_fallback_model: str | None = None
-    gemini_tts_model: str = "gemini-2.5-flash-preview-tts"
+    gemini_tts_model: str = "auto"
     gemini_stt_model: str | None = None
+    gemini_api_version: str = "v1beta"  # a v1 não aceita instrução de sistema nem lista os modelos de voz
     gemini_timeout_s: float = 30.0
     gemini_thinking_budget: int | None = None
+    gemini_low_latency: bool = True  # pede raciocínio mínimo para a fala começar antes
+    gemini_probe_models: bool = True  # testa na inicialização quais modelos realmente respondem
+    gemini_probe_timeout_s: float = 8.0
+    gemini_max_first_token_s: float = 1.5  # tempo-alvo até o 1º trecho ao escolher o modelo
+    gemini_first_token_timeout_s: float = 12.0
+    gemini_probe_ttl_s: float = 12 * 3600.0  # por quanto tempo vale o modelo escolhido no último teste
+    gemini_failover_models: int = 5          # quantos modelos tentar em um mesmo pedido
     gemini_auto_model: bool = True
     history_turns: int = 16
     # --- Voz ---
     tts_engine: str = "auto"  # auto | gemini | local | off
     tts_voice: str = "Charon"
+    tts_style: str = "cinematografico"
+    tts_parallel: int = 3
+    tts_chunking: str = "economico"  # economico = no máximo 2 requisições de voz por resposta | frase = uma por frase
     stt_engine: str = "auto"  # auto | gemini | whisper | off
     whisper_model: str = "small"
     wake_word: str = "jarvis"
@@ -109,16 +120,24 @@ def load_settings(env_file: Path | None = None) -> Settings:
     key = (os.getenv("GEMINI_API_KEY") or "").strip() or None
     s = Settings(
         gemini_api_key=key,
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip(),
+        gemini_model=(os.getenv("GEMINI_MODEL") or "auto").strip(),
         gemini_fallback_model=(os.getenv("GEMINI_FALLBACK_MODEL") or "").strip() or None,
-        gemini_tts_model=os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts").strip(),
+        gemini_tts_model=(os.getenv("GEMINI_TTS_MODEL") or "auto").strip(),
         gemini_stt_model=(os.getenv("GEMINI_STT_MODEL") or "").strip() or None,
+        gemini_api_version=(os.getenv("GEMINI_API_VERSION") or "v1beta").strip(),
         gemini_timeout_s=_float("GEMINI_TIMEOUT_S", 30.0),
         gemini_thinking_budget=_int("GEMINI_THINKING_BUDGET", None),
+        gemini_low_latency=_bool("GEMINI_LOW_LATENCY", True),
+        gemini_probe_models=_bool("GEMINI_PROBE_MODELS", True),
+        gemini_max_first_token_s=_float("GEMINI_MAX_FIRST_TOKEN_S", 1.5),
+        gemini_first_token_timeout_s=_float("GEMINI_FIRST_TOKEN_TIMEOUT_S", 12.0),
         gemini_auto_model=_bool("GEMINI_AUTO_MODEL", True),
         history_turns=_int("JARVIS_HISTORY_TURNS", 16) or 16,
         tts_engine=os.getenv("JARVIS_TTS_ENGINE", "auto").strip().lower(),
         tts_voice=os.getenv("JARVIS_TTS_VOICE", "Charon").strip(),
+        tts_style=os.getenv("JARVIS_TTS_STYLE", "cinematografico").strip().lower(),
+        tts_parallel=max(1, min(_int("JARVIS_TTS_PARALLEL", 3) or 3, 6)),
+        tts_chunking=(os.getenv("JARVIS_TTS_CHUNKING") or "economico").strip().lower(),
         stt_engine=os.getenv("JARVIS_STT_ENGINE", "auto").strip().lower(),
         whisper_model=os.getenv("JARVIS_WHISPER_MODEL", "small").strip(),
         wake_word=os.getenv("JARVIS_WAKE_WORD", "jarvis").strip().lower(),

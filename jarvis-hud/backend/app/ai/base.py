@@ -30,9 +30,11 @@ class ToolOutcome:
 class AIError(Exception):
     """Falha da IA já traduzida para o usuário. `code` é estável; `message` é em pt-BR."""
 
-    def __init__(self, code: str, message: str, *, retryable: bool = False, detail: str = ""):
+    def __init__(self, code: str, message: str, *, retryable: bool = False, detail: str = "", retry_after_s: float | None = None, scope: str = ""):
         super().__init__(message)
         self.code, self.message, self.retryable, self.detail = code, message, retryable, detail
+        #: para limites de uso: em quantos segundos a cota volta e se ela é por minuto ou por dia
+        self.retry_after_s, self.scope = retry_after_s, scope
 
 
 #: um provedor emite pedaços de texto (str) e pedidos de ferramenta (ToolCall)

@@ -115,10 +115,13 @@ export async function setWake(on: boolean) {
   useJarvis.setState({ wake: await audio.setWake(on) })
 }
 
-export async function playSample(engine: string, voice: string) {
+/** Toca uma amostra da voz. A primeira escuta de cada combinação gasta 1 pedido de voz;
+ *  as seguintes vêm do cache local do núcleo. */
+export async function playSample(engine: string, voice: string, style?: string): Promise<{ cached: boolean; duration: number }> {
   audio.unlock()
-  const res = await api<{ wav: string; text: string; duration: number }>('/api/voice/sample', { method: 'POST', body: JSON.stringify({ engine, voice }) })
+  const res = await api<{ wav: string; text: string; duration: number; cached: boolean }>('/api/voice/sample', { method: 'POST', body: JSON.stringify({ engine, voice, style }) })
   audio.stop()
   audio.enqueue({ turn: 'amostra', seq: 0, text: res.text, wav: res.wav, duration: res.duration })
   audio.speechDone('amostra')
+  return { cached: res.cached, duration: res.duration }
 }
