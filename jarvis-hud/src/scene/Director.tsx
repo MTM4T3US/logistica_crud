@@ -5,6 +5,7 @@ import { STAGE } from './glsl'
 import { clamp01, damp, rig, smooth } from '../state/rig'
 import { boot, FACE_SCAN_SECONDS, LINES, MAP_BRIEFING, now, useStore } from '../state/store'
 import { lineDuration } from '../state/speech'
+import { audio, liveAudio } from '../core/audio'
 
 const pos = new THREE.Vector3()
 const look = new THREE.Vector3()
@@ -29,8 +30,11 @@ export function Director() {
     rig.t = t
     rig.modeT = t - s.since
 
-    // fim natural da fala volta ao repouso
-    if (m === 'speaking' && !s.sequence && rig.modeT > lineDuration(LINES[s.line] ?? LINES[0], 0.3) + 1.6) s.setMode('idle')
+    audio.tick(dt)
+    const demo = s.demo
+
+    // demonstração: o fim da fala roteirizada volta ao repouso (no modo real quem decide é o áudio)
+    if (demo && m === 'speaking' && !s.sequence && rig.modeT > lineDuration(LINES[s.line] ?? LINES[0], 0.3) + 1.6) s.setMode('idle')
 
     rig.scan = m === 'face' ? clamp01(rig.modeT / FACE_SCAN_SECONDS) : 0
     rig.faceT = d(rig.faceT, m === 'face' ? 1 : 0, 2.6)
@@ -39,19 +43,28 @@ export function Director() {
     rig.miniT = d(rig.miniT, m === 'face' || m === 'map' || rig.mapT > 0.5 ? 1 : 0, 3.2)
     rig.listenT = d(rig.listenT, m === 'listening' ? 1 : 0, 4)
     rig.thinkT = d(rig.thinkT, m === 'thinking' ? 1 : 0, 4)
-    const talking =
-      (m === 'speaking' && rig.modeT > 0.3 && rig.modeT < lineDuration(LINES[s.line] ?? LINES[0], 0.3) + 0.3) ||
-      (m === 'map' && rig.modeT > MAP_SPEECH_DELAY && rig.modeT < lineDuration(MAP_BRIEFING, MAP_SPEECH_DELAY) + 0.3)
+    const talking = demo
+      ? (m === 'speaking' && rig.modeT > 0.3 && rig.modeT < lineDuration(LINES[s.line] ?? LINES[0], 0.3) + 0.3) ||
+        (m === 'map' && rig.modeT > MAP_SPEECH_DELAY && rig.modeT < lineDuration(MAP_BRIEFING, MAP_SPEECH_DELAY) + 0.3)
+      : liveAudio.speaking
     rig.speakT = d(rig.speakT, talking ? 1 : 0, 6)
     rig.markerT = d(rig.markerT, m === 'idle' || m === 'listening' ? 1 : m === 'face' ? 0.6 : 0, 4)
     const mapTarget = m === 'map' ? 1 : 0
     rig.mapT = snap ? mapTarget : rig.mapT + Math.sign(mapTarget - rig.mapT) * Math.min(Math.abs(mapTarget - rig.mapT), dt / 2.8)
 
-    // envelope de voz SIMULADO (não há áudio real neste protótipo)
-    const syll = Math.pow(Math.abs(Math.sin(t * 7.3)), 1.4) * (0.55 + 0.45 * Math.sin(t * 2.1 + 1.3))
-    const flutter = 0.5 + 0.5 * Math.sin(t * 13.7 + Math.sin(t * 3.1) * 2)
-    const target = talking ? (boot.freeze ? boot.level : clamp01(0.18 + 0.9 * syll * (0.6 + 0.4 * flutter))) : 0
-    rig.level = d(rig.level, target, talking ? 18 : 6)
+    if (demo) {
+      // envelope de voz SIMULADO — só na demonstração
+      const syll = Math.pow(Math.abs(Math.sin(t * 7.3)), 1.4) * (0.55 + 0.45 * Math.sin(t * 2.1 + 1.3))
+      const flutter = 0.5 + 0.5 * Math.sin(t * 13.7 + Math.sin(t * 3.1) * 2)
+      const target = talking ? (boot.freeze ? boot.level : clamp01(0.18 + 0.9 * syll * (0.6 + 0.4 * flutter))) : 0
+      rig.level = d(rig.level, target, talking ? 18 : 6)
+      rig.mic = d(rig.mic, m === 'listening' ? 0.3 + 0.12 * Math.sin(t * 6) : 0, 6)
+    } else {
+      // modo real: amplitude medida do áudio reproduzido e do microfone
+      rig.level = liveAudio.outLevel
+      rig.mic = m === 'listening' ? liveAudio.micLevel : d(rig.mic, 0, 8)
+    }
+    rig.errorT = d(rig.errorT, liveAudio.errorUntil > performance.now() / 1000 ? 1 : 0, 7)
 
     const speed = s.ritmo === 'RÁPIDO' ? 1.8 : 1
     rig.spin = d(rig.spin, speed * (m === 'thinking' ? 3.4 : m === 'speaking' ? 1.7 : m === 'listening' ? 1.35 : 1), 3)

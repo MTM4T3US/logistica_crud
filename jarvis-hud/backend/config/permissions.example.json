@@ -1,0 +1,30 @@
+{
+  "_comentario": "Copie para permissions.json e edite. A IA só pode escolher os 'id' listados aqui; nunca envia comando, caminho ou argumento. 'command' é uma lista fixa (sem shell). Marque \"confirm\": true para exigir um clique no HUD antes de executar.",
+  "apps": [
+    { "id": "bloco_de_notas", "name": "Bloco de Notas", "command": ["notepad.exe"] },
+    { "id": "calculadora", "name": "Calculadora", "command": ["calc.exe"] },
+    { "id": "explorador", "name": "Explorador de Arquivos", "command": ["explorer.exe"] },
+    { "id": "vscode", "name": "Visual Studio Code", "command": ["code"] },
+    { "id": "terminal", "name": "Terminal do Windows", "command": ["wt.exe"] },
+    { "id": "navegador", "name": "Microsoft Edge", "command": ["msedge.exe"] }
+  ],
+  "folders": [
+    { "id": "documentos", "name": "Documentos", "path": "%USERPROFILE%\\Documents" },
+    { "id": "downloads", "name": "Downloads", "path": "%USERPROFILE%\\Downloads" },
+    { "id": "projetos", "name": "Projetos", "path": "%USERPROFILE%\\Documents\\Projetos" }
+  ],
+  "routines": [
+    {
+      "id": "programar",
+      "name": "Preparar ambiente de programação",
+      "confirm": true,
+      "steps": [
+        { "tool": "open_app", "args": { "app_id": "vscode" } },
+        { "tool": "open_app", "args": { "app_id": "terminal" } },
+        { "tool": "open_folder", "args": { "folder_id": "projetos" } }
+      ]
+    }
+  ],
+  "volume_control": true,
+  "process_list": true
+}

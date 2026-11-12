@@ -19,6 +19,8 @@ export const boot = {
   /** congela o tempo no instante `at` — screenshots reprodutíveis */
   freeze: params.get('freeze') === '1',
   level: Number(params.get('level') ?? 0.85),
+  /** não tenta conectar ao backend (capturas da demonstração) */
+  offline: params.get('offline') === '1',
 }
 
 const FROZEN_T = 100 + (Number(params.get('seed') ?? 0) || 0)
@@ -39,7 +41,11 @@ interface State {
   weatherPinned: boolean
   sequence: boolean
   uiVisible: boolean
+  /** true enquanto o HUD exibe conteúdo de demonstração (falas e dados simulados) */
+  demo: boolean
   setMode: (m: Mode, line?: number) => void
+  /** troca de estado comandada pelo assistente real (backend) */
+  setLive: (m: Mode) => void
   setQuality: (q: Quality, auto?: boolean) => void
   cycle: (k: 'luz' | 'ritmo' | 'camera') => void
   setSequence: (on: boolean) => void
@@ -58,13 +64,17 @@ export const useStore = create<State>((set, get) => ({
   weatherPinned: params.get('weather') === '1',
   sequence: false,
   uiVisible: boot.ui,
+  demo: Boolean(pMode) || boot.demo,
   setMode: (mode, line) =>
     set((s) => ({
       mode,
       since: now(),
       line: line ?? s.line,
       weatherPinned: s.weatherPinned || mode === 'map',
+      // repouso é neutro; qualquer outro estado acionado à mão é demonstração
+      demo: mode !== 'idle',
     })),
+  setLive: (mode) => set({ mode, since: now(), demo: false }),
   setQuality: (quality, auto = false) => set({ quality, autoQuality: auto }),
   cycle: (k) => {
     const s = get()

@@ -1,0 +1,2 @@
+# Opcional: transcrição 100% local (sem nuvem). Baixa o modelo no primeiro uso.
+faster-whisper>=1.0

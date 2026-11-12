@@ -42,7 +42,8 @@ for (const [name, params] of SHOTS) {
   const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 })
   page.on('pageerror', (e) => console.error('[pageerror]', e.message))
   page.on('console', (m) => { if (m.type() === 'error') console.error('[console]', m.text()) })
-  const url = `${base}?ui=0&freeze=1&${params}&q=${q}`
+  // offline=1: as capturas são da demonstração visual e não dependem do backend
+  const url = `${base}?ui=0&freeze=1&offline=1&${params}&q=${q}`
   await page.goto(url, { waitUntil: 'load', timeout: 120000 })
   await page.waitForSelector('canvas', { timeout: 120000 })
   await page.evaluate(() => document.fonts.ready)

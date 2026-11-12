@@ -18,8 +18,12 @@ export const rig = {
   speakT: 0,
   /** marcadores rosados do anel (repouso/escuta) */
   markerT: 1,
-  /** envelope de voz simulado 0..1 */
+  /** nível de voz 0..1 — áudio real do assistente (ou envelope simulado na demonstração) */
   level: 0,
+  /** nível do microfone 0..1 durante a escuta */
+  mic: 0,
+  /** 0..1 enquanto um erro é sinalizado */
+  errorT: 0,
   /** multiplicador de velocidade das rotações */
   spin: 1,
   /** fator global de brilho (LUZ CINEMA/SUAVE) */

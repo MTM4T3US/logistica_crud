@@ -4,3 +4,12 @@ dist/
 reference/
 evidence/comparativos/
 *.log
+
+# JARVIS Core (backend) — segredos e dados locais nunca vão para o Git
+backend/.env
+backend/.venv/
+backend/data/
+backend/samples/
+backend/config/permissions.json
+backend/**/__pycache__/
+backend/.pytest_cache/
