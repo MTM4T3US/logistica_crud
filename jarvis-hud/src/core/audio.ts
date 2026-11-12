@@ -183,6 +183,11 @@ class AudioEngine {
     if (!this.current) this.next()
   }
 
+  /** Há fala tocando ou aguardando na fila? */
+  get active(): boolean {
+    return this.current !== null || this.queue.length > 0
+  }
+
   /** O backend avisou que não virá mais áudio desta resposta. */
   speechDone(turn: string) {
     this.doneTurn = turn
@@ -226,6 +231,7 @@ class AudioEngine {
     const chunk = this.queue.shift()
     if (!chunk) {
       if (this.doneTurn && liveAudio.speaking) this.finish()
+      else if (!liveAudio.speaking) this.handlers.onSpeaking(false) // nada tocou (ex.: autoplay bloqueado): libera o HUD
       return
     }
     const ctx = this.ensure()

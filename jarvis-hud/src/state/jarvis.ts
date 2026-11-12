@@ -111,7 +111,7 @@ export function handleEvent(ev: Record<string, any>) {
         show('thinking')
       } else {
         useJarvis.setState({ busy: false, activity: '' })
-        if (!liveAudio.speaking) settle()
+        if (!liveAudio.speaking && !audio.active) settle()
       }
       break
     case 'transcript':
@@ -144,7 +144,8 @@ export function handleEvent(ev: Record<string, any>) {
       useJarvis.setState({ busy: false, activity: '', core: core ? { ...core, ai: ev.ai } : core })
       if (ev.interrupted) { audio.stop(); settle(); break }
       if (!gotAudio && ev.text) audio.showText(ev.text) // sem voz: só a legenda, o núcleo não finge fala
-      if (!liveAudio.speaking) settle()
+      // com áudio na fila, quem devolve o HUD ao repouso é o fim da reprodução
+      if (!liveAudio.speaking && !audio.active) settle()
       break
     }
     case 'error':

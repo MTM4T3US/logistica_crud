@@ -175,17 +175,24 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
 
 
 async def _feed(conn: Connection, core: Assistant) -> None:
-    """Empurra leituras reais para o HUD: sistema a cada 2,5 s, clima a cada 10 min."""
-    last_weather = 0.0
-    loop = asyncio.get_running_loop()
-    while not conn.closed:
-        if loop.time() - last_weather > WEATHER_PERIOD_S or last_weather == 0.0:
-            last_weather = loop.time()
+    """Empurra leituras reais para o HUD: sistema a cada 2,5 s; clima a cada 10 min.
+
+    O clima roda em tarefa própria: um provedor lento nunca atrasa as leituras do sistema."""
+
+    async def weather_loop() -> None:
+        while not conn.closed:
             await conn.send({"type": "weather", "weather": await core.weather.get()})
             if core.news.enabled:
                 await conn.send({"type": "news", "news": await core.news.get()})
-        await conn.send({"type": "system", "system": await asyncio.to_thread(core.monitor.snapshot)})
-        await asyncio.sleep(SYSTEM_PERIOD_S)
+            await asyncio.sleep(WEATHER_PERIOD_S)
+
+    weather = asyncio.create_task(weather_loop())
+    try:
+        while not conn.closed:
+            await conn.send({"type": "system", "system": await asyncio.to_thread(core.monitor.snapshot)})
+            await asyncio.sleep(SYSTEM_PERIOD_S)
+    finally:
+        weather.cancel()
 
 
 def run() -> None:

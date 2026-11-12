@@ -1,4 +1,22 @@
-# Evidências — screenshots reais do protótipo
+# Evidências
+
+## Versão 0.2 — assistente real (`evidence/0.2/`)
+
+Geradas por `npm run e2e` com o backend real em execução, **sem chave do Gemini** (modo local).
+Chromium headless, 1280×720, perfil gráfico `medium`, renderização por software.
+
+| Arquivo | O que mostra |
+|---|---|
+| `01-repouso-dados-reais.jpg` | Núcleo conectado; relógio de Itumbiara; clima do Open-Meteo; CPU/RAM/disco; dispositivos (simuladores). |
+| `02-falando-audio-real.jpg` | Resposta falada: glifo e anéis movidos pela amplitude do áudio; legenda com o texto real; "COMANDOS EXECUTADOS" com a leitura do sistema. |
+| `03-ouvindo-microfone.jpg` | Captura do microfone (um WAV sintético como entrada): ondas e glifo seguem o volume. |
+| `04-apos-microfone.jpg` | Gravação enviada; sem motor de transcrição, o núcleo avisa em vez de inventar um texto. |
+| `05-configuracoes.jpg` | Painel de configurações (IA, áudio, privacidade, desempenho, demonstração). |
+
+A voz usada nessas capturas é a local do Linux (espeak-ng). Nenhuma delas prova a integração
+com o Gemini — ver `docs/RELATORIO_0.2.md`.
+
+## Versão 0.1 — demonstração visual (arquivos nesta pasta)
 
 Gerados por `scripts/capture.mjs` em Chromium headless, 1920×1080, perfil `high`
 (exceto o nº 12), com o tempo congelado (`freeze=1`) para serem reprodutíveis.

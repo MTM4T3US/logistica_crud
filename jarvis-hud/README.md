@@ -1,122 +1,146 @@
-# JARVIS HUD — protótipo visual (DEMO)
+# JARVIS OS 0.2
 
-Recriação, com recursos gráficos originais, da interface holográfica mostrada no monitor do
-vídeo de referência: núcleo de anéis azul, base circular com pedestal e feixe, arco superior,
-planeta com luzes de cidades, painéis laterais, legendas e mapa 3D.
-
-**É só a camada visual.** Não há voz, microfone, câmera, reconhecimento facial, clima, notícias
-nem mapas reais — tudo isso é simulado e aparece marcado como `DEMO` na tela. Nenhum hardware
-é acionado.
+Assistente pessoal com interface holográfica: um HUD em React + Three.js e um núcleo local em
+Python (FastAPI) que conversa pelo Google Gemini, fala, ouve e consulta dados reais do
+computador e de Itumbiara-GO.
 
 Esta pasta é independente do CRUD de logística que está na raiz do repositório.
 
-## Rodar no Windows
+> **Antes de confiar:** a integração com o Gemini foi escrita e testada com um cliente
+> simulado, mas **ainda não rodou contra a API real** — não havia chave durante o
+> desenvolvimento. Também não foi executada em Windows. O que foi e o que não foi verificado
+> está em [`docs/RELATORIO_0.2.md`](docs/RELATORIO_0.2.md).
 
-1. Instale o [Node.js LTS](https://nodejs.org) (20 ou mais novo).
-2. No PowerShell, dentro desta pasta:
+## O que é real e o que é simulado
 
-   ```powershell
-   cd jarvis-hud
-   npm install
-   npm run dev
-   ```
-
-3. Abra <http://127.0.0.1:5173> no Chrome ou Edge e aperte `F` para tela cheia.
-
-Atalho: com o Node.js instalado, dê dois cliques em `INICIAR.bat`. Ele faz o `npm install`
-na primeira vez e abre o navegador. (Escrito sem acesso a uma máquina Windows — se falhar,
-use os comandos acima.)
-
-Para a versão otimizada: `npm run build` e depois `npm run preview` (porta 4173).
-
-Se o Windows estiver usando a GPU integrada, force a dedicada em
-*Configurações → Sistema → Tela → Elementos gráficos* para o navegador.
-
-## Controles
-
-| Tecla | Ação |
+| Recurso | Situação |
 |---|---|
-| `1` Repouso · `2` Escuta · `3` Pensando · `4` Falando | estados do assistente |
-| `5` Rosto · `6` Mapa 3D | demonstrações (dados simulados) |
-| `D` | sequência demo de ~45 s que reencena a linha do tempo da referência |
-| `H` | oculta/mostra a barra de controles |
-| `F` | tela cheia |
+| Cena holográfica (núcleo, base, feixe, arco, planeta) | Real — igual à 0.1, agora movida por áudio de verdade. |
+| Conversa com IA | Gemini, quando há chave em `backend/.env`. Sem chave: modo local com poucos comandos fixos (não é IA). |
+| Voz do assistente | Gemini TTS (nuvem) ou voz local do sistema. |
+| Fala do usuário | Microfone → transcrição pelo Gemini (nuvem, com consentimento) ou Whisper local opcional. |
+| Hora, clima | Reais: fuso `America/Sao_Paulo`; clima do Open-Meteo. |
+| CPU, RAM, disco, processos | Reais (psutil). |
+| Abrir apps/pastas, volume, rotinas | Reais no Windows, só para itens de `backend/config/permissions.json`. |
+| LEDs, persiana, fechadura, robô | **Simuladores.** Nenhum hardware é acionado. |
+| Reconhecimento facial | **Demonstração visual.** Nenhuma câmera é usada. |
+| Mapa 3D | **Cidade fictícia de demonstração**, identificada na tela. |
+| Notícias | Desligadas até você configurar um feed RSS. |
 
-As abas no canto superior direito são clicáveis: **LUZ** (CINEMA/SUAVE — intensidade do brilho),
-**RITMO** (CINEMA/RÁPIDO — velocidade das rotações) e **CÂMERA** (AUTOMÁTICA/FIXA — balanço).
+## Iniciar no Windows
 
-Parâmetros de URL, úteis para screenshots:
-`?state=idle|listening|thinking|speaking|face|map` · `&at=<s>` (tempo já decorrido no estado) ·
-`&freeze=1` (congela o tempo) · `&q=high|medium|low` · `&ui=0` · `&line=0|1` · `&weather=1` ·
-`&level=0..1` (nível de voz simulado, com `freeze`) · `&demo=1`.
+Requisitos: [Node.js LTS](https://nodejs.org) e [Python 3.10+](https://www.python.org/downloads/)
+(marque "Add python.exe to PATH" ao instalar).
 
-## Perfis de qualidade
+Dê dois cliques em **`INICIAR.bat`**. Na primeira vez ele instala as dependências (alguns
+minutos, precisa de internet), compila o HUD, cria `backend\.env` e
+`backend\config\permissions.json` a partir dos exemplos, inicia o núcleo e abre
+<http://127.0.0.1:8765>. Use Chrome ou Edge; `F` alterna a tela cheia.
+
+Para ativar a IA, coloque sua chave em `backend\.env` (`GEMINI_API_KEY=`) e reinicie —
+passo a passo em [`docs/CONFIGURACAO_GEMINI.md`](docs/CONFIGURACAO_GEMINI.md).
+
+<details>
+<summary>Iniciar manualmente / modo de desenvolvimento</summary>
+
+```powershell
+cd jarvis-hud
+npm install
+python -m venv backend\.venv
+backend\.venv\Scripts\python -m pip install -r backend\requirements.txt
+copy backend\.env.example backend\.env
+copy backend\config\permissions.example.json backend\config\permissions.json
+
+# terminal 1 — núcleo
+cd backend; .venv\Scripts\python -m app.main
+
+# terminal 2 — HUD com recarga automática (http://127.0.0.1:5173, repassa /api e /ws ao núcleo)
+npm run dev
+```
+
+Sem o núcleo rodando, o HUD abre do mesmo jeito em modo demonstração.
+</details>
+
+## Usar
+
+- **Texto:** digite na barra inferior e pressione Enter.
+- **Voz:** botão do microfone ou tecla `M`. A gravação termina sozinha após ~1 s de silêncio.
+  Com transcrição em nuvem, o HUD pede autorização antes de enviar áudio e mostra o selo NUVEM.
+- **Escuta contínua:** Configurações → Áudio. Só reage a frases com a palavra "Jarvis".
+- **Interromper:** botão "Parar", `Esc`, ou comece outro comando.
+- **Configurações (engrenagem):** IA, voz e mecanismo, velocidade, volume, dispositivos de
+  áudio, privacidade, qualidade gráfica e os estados de demonstração.
+- **Teclas:** `M` falar · `Esc` parar · `H` ocultar a interface · `F` tela cheia ·
+  `1`–`6` estados de demonstração · `D` sequência demo.
+
+À esquerda ficam hora, clima e dispositivos; à direita, o estado da IA e do sistema e a lista
+**Comandos executados** (✓ executado, ✕ recusado ou falhou, SIM só no simulador); embaixo, a
+transcrição da conversa.
+
+## O que o assistente pode fazer no computador
+
+Somente o que está em `backend/config/permissions.json`: aplicativos (lista fixa de
+argumentos, sem shell), pastas e rotinas. A IA escolhe um identificador dessa lista; nunca
+envia um comando. Itens com `"confirm": true` pedem um clique de autorização no HUD. Não há
+ferramenta de terminal, de arquivos ou de instalação. Detalhes em
+[`docs/ARQUITETURA_JARVIS_CORE.md`](docs/ARQUITETURA_JARVIS_CORE.md).
+
+## Qualidade gráfica
 
 | Perfil | Para | O que muda |
 |---|---|---|
-| `high` | GPU dedicada folgada | até 2× DPR, MSAA 4×, bloom em 8 níveis, aberração cromática, cidade 56×56 quadras |
-| `medium` (padrão) | GPU intermediária, ex. RTX 2050 / 16 GB em 1080p | DPR até 1,25, bloom em 6 níveis, cidade 44×44 |
-| `low` | GPU integrada | sem pós-processamento, 75 % da resolução, cidade 30×30, menos partículas |
+| `high` | GPU dedicada folgada | até 2× DPR, MSAA 4×, bloom em 8 níveis, cidade 56×56 quadras |
+| `medium` (padrão) | GPU intermediária, ex. RTX 2050 em 1080p | DPR até 1,25, bloom em 6 níveis, cidade 44×44 |
+| `low` | GPU integrada | sem pós-processamento, 75 % da resolução |
 
-Em "Auto", se a média ficar abaixo de ~27 fps por 4 s, o perfil desce um degrau sozinho.
-Os perfis **não foram medidos em uma RTX 2050**: foram dimensionados por contagem de
-instâncias e custo de shader. Veja "Limitações".
+Em "Automática", se a média ficar abaixo de ~27 fps por 4 s, o perfil desce um degrau. Os
+perfis não foram medidos em uma RTX 2050. Se o Windows estiver usando a GPU integrada, force a
+dedicada em *Configurações → Sistema → Tela → Elementos gráficos* para o navegador.
 
-## Como está organizado
-
-```
-src/
-  state/store.ts      estados, falas demo, parâmetros de URL
-  state/rig.ts        valores de animação compartilhados (atualizados a cada frame)
-  state/quality.ts    perfis de qualidade
-  state/speech.ts     ritmo de revelação das legendas
-  scene/Scene.tsx     Canvas + pós-processamento (bloom, vinheta, ruído)
-  scene/Director.tsx  transições entre estados e câmera
-  scene/Space.tsx     planeta, luzes de cidades, atmosfera e estrelas (shader em tela cheia)
-  scene/Canopy.tsx    arco superior e treliça dos cantos (shader)
-  scene/Platform.tsx  base circular, pedestal, feixe, partículas
-  scene/Core.tsx      núcleo: anéis em camadas, marcadores, ondas, glifo reativo
-  scene/FaceScan.tsx  busto em nuvem de pontos (demo)
-  scene/City.tsx      cidade procedural instanciada (demo)
-  hud/Hud.tsx         relógio, estado, legendas, cartões, painéis do rosto, controles
-docs/REFERENCIA_VISUAL.md   análise dos frames, paleta, proporções, checklist de fidelidade
-evidence/                   screenshots reais de cada estado + diferenças observadas
-scripts/capture.mjs         gera os screenshots (Playwright)
-scripts/compare.mjs         monta a página lado a lado com a referência
-```
-
-Tudo é gerado por código: não há texturas, modelos, vídeos ou logos de terceiros.
-Fontes: Orbitron e Rajdhani (SIL OFL), empacotadas via `@fontsource`.
-
-## Screenshots e comparação
+## Testes
 
 ```powershell
-npm i -D playwright; npx playwright install chromium   # só na primeira vez
-npm run build; npm run preview                         # deixe rodando
-npm run capture                                        # em outro terminal → evidence/*.jpg
+# backend — 85 testes, sem rede nem chave
+backend\.venv\Scripts\python -m pip install -r backend\requirements-dev.txt
+cd backend; .venv\Scripts\python -m pytest; cd ..
+
+# frontend
+npx tsc --noEmit; npm run build
+
+# ponta a ponta em navegador real (núcleo rodando; requer Playwright)
+npm i -D playwright; npx playwright install chromium
+npm run e2e
+
+# integração real com o Gemini e amostras de voz (requer a chave)
+backend\.venv\Scripts\python backend\scripts\check_gemini.py
 ```
 
-Para a página lado a lado, copie a pasta `reference/` do kit para dentro de `jarvis-hud/`
-e rode `npm run compare`. A pasta `reference/` e a página gerada ficam fora do Git de propósito:
-são quadros de um vídeo de terceiros, para uso privado.
+## Estrutura
 
-## Limitações reais
+```
+backend/app/            núcleo: main, assistant, ai/, voice/, system/, services/, devices/, memory/, security/
+backend/config/         permissions.example.json (lista de apps, pastas e rotinas autorizados)
+backend/scripts/        check_gemini.py (verificação da IA e comparação de vozes)
+backend/tests/          testes automatizados
+src/scene/              cena 3D (Core, Platform, Space, Canopy, City, FaceScan, Director)
+src/core/               audio.ts (reprodução, microfone, níveis) · backend.ts (sessão e WebSocket)
+src/state/              store.ts (estado visual) · jarvis.ts (estado do assistente) · rig.ts
+src/hud/                Hud.tsx · Settings.tsx
+scripts/                capture.mjs · compare.mjs · e2e.mjs
+docs/                   documentação
+evidence/               capturas da 0.1 e da 0.2
+```
 
-- **Nada é funcional além do visual.** O nível de voz é uma função matemática; o "rosto" é um
-  desenho; a cidade é inventada; o relógio é o do sistema.
-- **Desempenho não medido em GPU real.** Os screenshots foram gerados em Chromium headless com
-  renderização por software. Falta medir fps numa RTX 2050 e ajustar os perfis.
-- **O mapa não é fotogrametria.** A referência usa imagem aérea 3D de uma cidade real; aqui são
-  blocos procedurais com telhados coloridos. Fidelidade parcial neste estado.
-- **Tela curva/ultrawide:** o layout foi acertado em 16:9. Em 21:9 funciona, mas as proporções
-  do núcleo em relação à largura mudam.
-- **App de navegador, não executável.** Para virar janela própria no Windows falta empacotar
-  (Tauri ou Electron) — isso instala software e não foi feito.
-- Estado **Pensando** não existe isolado na referência; o visual dele é proposta minha.
+## Documentação
 
-## Próximos passos sugeridos (precisam da sua aprovação)
+- [`docs/RELATORIO_0.2.md`](docs/RELATORIO_0.2.md) — auditoria, testes, critérios de aprovação, limitações.
+- [`docs/ARQUITETURA_JARVIS_CORE.md`](docs/ARQUITETURA_JARVIS_CORE.md) — módulos, protocolo e segurança.
+- [`docs/CONFIGURACAO_GEMINI.md`](docs/CONFIGURACAO_GEMINI.md) — chave, modelos, privacidade e falhas.
+- [`docs/VOZ_JARVIS.md`](docs/VOZ_JARVIS.md) — identidade vocal, comparação de vozes, áudio e microfone.
+- [`docs/INTEGRACOES_FUTURAS.md`](docs/INTEGRACOES_FUTURAS.md) — dispositivos e mapa real.
+- [`docs/REFERENCIA_VISUAL.md`](docs/REFERENCIA_VISUAL.md) — análise do vídeo de referência (0.1).
 
-1. Medir fps na sua máquina e calibrar os perfis.
-2. Voz local gratuita (Web Speech API do Windows) e microfone alimentando o glifo de verdade.
-3. Empacotar como app de desktop.
-4. Clima/notícias/mapa com fontes gratuitas — só depois de escolher quais.
+## Licenças e atribuições
+
+Tudo na cena é gerado por código. Fontes: Orbitron e Rajdhani (SIL OFL). Dados meteorológicos:
+[Open-Meteo](https://open-meteo.com) (CC BY 4.0), gratuito para uso não comercial.
