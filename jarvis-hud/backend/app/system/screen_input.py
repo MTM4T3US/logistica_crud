@@ -133,6 +133,7 @@ class ScreenInput:
     def type_text(self, text: str) -> None: ...
     def combo(self, combo: str) -> None: ...
     def foreground(self) -> tuple[str, str]: ...      # (título, exe)
+    def foreground_path(self) -> str: return ""   # caminho completo do executável em foco (0.7: modo jogo)
     def minimize_titled(self, needle: str) -> list[int]: ...
     def restore(self, handles: list[int]) -> None: ...
 
@@ -254,6 +255,16 @@ class RealScreenInput(ScreenInput):  # pragma: no cover — só roda no Windows
         except Exception:
             pass
         return buf.value, exe
+
+    def foreground_path(self) -> str:
+        pid = self.wt.DWORD()
+        self.u.GetWindowThreadProcessId(self.u.GetForegroundWindow(), ctypes.byref(pid))
+        try:
+            import psutil
+
+            return psutil.Process(pid.value).exe()
+        except Exception:
+            return ""
 
     def minimize_titled(self, needle: str) -> list[int]:
         from .win32api import SW_MINIMIZE, RealWin32Api

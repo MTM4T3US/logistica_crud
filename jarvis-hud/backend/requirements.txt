@@ -12,3 +12,4 @@ pycaw>=20240210 ; sys_platform == "win32"
 # app de bandeja (JARVIS.bat): icone, menu e atalhos globais
 pystray>=0.19 ; sys_platform == "win32"
 pillow>=10
+segno>=1.5            # QR do pareamento do celular (BSD)

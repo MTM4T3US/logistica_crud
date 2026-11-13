@@ -5,13 +5,14 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import os
 import re
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from fastapi import WebSocket
 
@@ -33,7 +34,14 @@ from .ai.agenda_tools import AgendaTools
 from .ai.home_tools import HomeTools
 from .devices.tuya import build_lights
 from .devices.own_lock import OwnLock, load_config as load_lock_config
-from .services.agenda import Agenda
+from .services.agenda import Agenda, spoken_day
+from .services.lists import Lists
+from .services.finance import Finance, say_quotes
+from .services.pomodoro import Pomodoro
+from .services.news import google_news_feed
+from .ai.list_tools import ListTools
+from .ai.extra_tools import ExtraTools
+from .system.desk_extras import Clipboard, get_clipboard, is_game, read_selection
 from .ai.computer_agent import ComputerAgent, gemini_asker
 from .system.windows import ActionResult
 from .system.desktop import Desktop
@@ -120,13 +128,54 @@ class Connection:
         return False
 
 
+#: o que NUNCA roda de fora do PC (celular pareado, Telegram): mexer na tela/teclado, ver a tela, apagar, matar processos
+REMOTE_DENY = frozenset({"computer_task", "type_text", "press_keys", "take_screenshot", "recycle_file", "kill_process", "read_selection"})
+
+
+class HeadlessConn:
+    """Conversa sem tela (0.7): celular pareado ou Telegram. Mesmo caminho do HUD (roteador, ferramentas,
+    confirmações, registro), mas sem voz e com as ações de tela e teclado bloqueadas."""
+
+    def __init__(self, origin: str, confirm: Callable[[str], Awaitable[bool]] | None = None, deny: frozenset[str] = REMOTE_DENY):
+        self.origin, self._confirm, self.deny = origin, confirm, deny
+        self.events: list[dict[str, Any]] = []
+        self.asked: list[str] = []
+        self.turn: asyncio.Task | None = None
+        self.listen: asyncio.Task | None = None
+        self.closed = False
+        self.window_until = 0.0
+
+    async def send(self, event: dict[str, Any]) -> None:
+        self.events.append(event)
+
+    async def confirm(self, text: str) -> bool:
+        self.asked.append(text)
+        return bool(await self._confirm(text)) if self._confirm else False
+
+    def resolve_confirm(self, cid: str, approve: bool) -> None:  # pragma: no cover — sem botões aqui
+        pass
+
+    async def cancel_turn(self) -> bool:
+        return False
+
+    @property
+    def reply(self) -> str:
+        end = next((e for e in reversed(self.events) if e.get("type") == "turn_end"), None)
+        return (end or {}).get("text", "")
+
+    @property
+    def tools(self) -> list[dict[str, Any]]:
+        return [{k: e.get(k) for k in ("name", "label", "ok", "executed", "simulated", "summary")} for e in self.events if e.get("type") == "tool" and e.get("stage") == "end"]
+
+
 class Assistant:
     def __init__(
         self, settings: Settings, *, gemini: GeminiProvider | None = None, memory: MemoryStore | None = None,
         perms: Permissions | None = None, controller: SystemController | None = None, monitor: SystemMonitor | None = None,
         devices: DeviceRegistry | None = None, weather: WeatherService | None = None, news: NewsService | None = None,
         tts: VoiceOutput | None = None, stt: VoiceInput | None = None, wake: WakeDetector | None | bool = True,
-        desktop: Desktop | None = None, screen: ScreenInput | None = None,
+        desktop: Desktop | None = None, screen: ScreenInput | None = None, clipboard: Clipboard | None = None,
+        finance: Finance | None = None,
     ):
         self.settings = settings
         self.data_dir = settings.db_path.parent
@@ -180,13 +229,35 @@ class Assistant:
         self.home = HomeTools(self.devices)
         self.tools.extensions.append(self.home.specs)
         self.router = LocalRouter(self.perms, lambda: set(self.tools.specs()), settings.wake_word,
-                                  lights=lambda: [(d.id, d.name) for d in self.home.lights()])
+                                  lights=lambda: [(d.id, d.name) for d in self.home.lights()], team=lambda: self.runtime().get("team", ""))
         self.local = LocalProvider(self.router)
         self.last_ai_error: dict[str, str] | None = None
         self.last_timings: dict[str, float] | None = None
         self.led_fx = self._make_led_effects(settings)
         self._intro_task: asyncio.Task | None = None
         self._apply_face_runtime()
+        # 0.7: anotações, lista de compras, cotações, Pomodoro, ler a seleção, modo jogo, resumo da semana
+        memdb = str(settings.db_path) == ":memory:"
+        self.lists = Lists(":memory:" if memdb else self.data_dir / "listas.sqlite3", settings.location.timezone)
+        self.tools.extensions.append(ListTools(self.lists).specs)
+        self.finance = finance or Finance(enabled=os.getenv("JARVIS_COTACOES", "on").strip().lower() not in ("off", "0", "false"))
+        self.clipboard = clipboard if clipboard is not None else (get_clipboard() if self.screen is not None else None)
+        self.pomodoro = Pomodoro(self._pomodoro_changed)
+        self.game: dict[str, Any] = {"on": False, "source": "", "miss": 0}
+        self.tools.extensions.append(ExtraTools(self).specs)
+        #: avisos que também vão para fora do PC (Telegram), quando configurado
+        self.remote: list[Callable[[str], Awaitable[Any]]] = []
+        self._week_done: set[str] = set()
+        self._team_news: tuple[str, NewsService] | None = None
+        self._game_task: asyncio.Task | None = None
+        # 0.7: bot do Telegram (só com TELEGRAM_BOT_TOKEN no .env)
+        self.telegram: Any = None
+        tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        if tg_token and not memdb:
+            from .services.telegram import TelegramBot
+
+            self.telegram = TelegramBot(tg_token, self, self.data_dir / "telegram.json")
+            self.remote.append(self.telegram.notify)
 
     def _apply_face_runtime(self) -> None:
         """0.6.1: a piscada na entrada é escolha do usuário no HUD (padrão: só o rosto)."""
@@ -236,7 +307,10 @@ class Assistant:
         return DeviceRegistry(simulators=settings.devices_simulators, leds_off=settings.leds_mode == "off")
 
     async def shutdown(self) -> None:
-        for task in (self._reminders, self._intro_task):
+        await self.pomodoro.stop()
+        if self.telegram is not None:
+            await self.telegram.stop()
+        for task in (self._reminders, self._intro_task, self._game_task):
             if task and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -244,6 +318,10 @@ class Assistant:
 
     async def startup(self) -> None:
         self._reminders = asyncio.create_task(self._reminder_loop())
+        if self.screen is not None:
+            self._game_task = asyncio.create_task(self._game_loop())   # modo jogo automático (Windows)
+        if self.telegram is not None:
+            await self.telegram.start()
         if self.led_fx is not None and self.led_fx.intro_enabled and not self.gate.active:
             # sem entrada por rosto: o efeito de abertura roda ao iniciar. Com ela, roda ao entrar (on_entry)
             self._intro_task = asyncio.create_task(self.led_fx.intro())   # em segundo plano: não atrasa o núcleo
@@ -268,6 +346,10 @@ class Assistant:
             "scene_schedules": {},
             # 0.6.1: entrar só pelo rosto (sem piscar); câmera automática na tela de bloqueio (opcional)
             "face_blink": False, "face_auto": False,
+            # 0.7: boletim (cotações e time), resumo da semana, modo jogo, descanso de tela, celular
+            "bulletin_usd": True, "bulletin_btc": False, "team": "",
+            "week_summary": {"on": True, "day": 6, "at": "20:00"},
+            "game_auto": True, "game_led": "#8a2be2", "screensaver_min": 10, "mobile_enabled": False, "gestures": False,
         }
         saved = self.memory.get_setting("runtime", {}) or {}
         return {**defaults, **{k: v for k, v in saved.items() if k in defaults}}
@@ -291,6 +373,13 @@ class Assistant:
             "user_title": lambda v: isinstance(v, str) and 0 < len(v.strip()) <= 24,
             "intro_enabled": lambda v: isinstance(v, bool),
             "face_blink": lambda v: isinstance(v, bool), "face_auto": lambda v: isinstance(v, bool),
+            "bulletin_usd": lambda v: isinstance(v, bool), "bulletin_btc": lambda v: isinstance(v, bool),
+            "team": lambda v: isinstance(v, str) and len(v.strip()) <= 40 and not re.search(r"[<>\"\\]", v),
+            "week_summary": lambda v: isinstance(v, dict) and isinstance(v.get("on", True), bool) and v.get("day", 6) in range(7)
+            and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(v.get("at", "20:00"))) is not None,
+            "game_auto": lambda v: isinstance(v, bool), "game_led": lambda v: v == "" or (isinstance(v, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", v) is not None),
+            "screensaver_min": lambda v: isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 120,
+            "mobile_enabled": lambda v: isinstance(v, bool), "gestures": lambda v: isinstance(v, bool),
             "scene_schedules": lambda v: isinstance(v, dict) and len(v) <= 20 and all(
                 isinstance(k, str) and isinstance(x, dict) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(x.get("at", "")))
                 and x.get("days", "todos") in SCENE_DAYS and isinstance(x.get("on", True), bool) for k, x in v.items()),
@@ -299,7 +388,7 @@ class Assistant:
         }
         for key, value in patch.items():
             if key in rules and rules[key](value):
-                rt[key] = value.strip() if key == "user_title" else round(float(value), 2) if key in ("tts_speed", "intro_music_volume", "intro_voice_delay_s") else value
+                rt[key] = value.strip() if key in ("user_title", "team") else round(float(value), 2) if key in ("tts_speed", "intro_music_volume", "intro_voice_delay_s") else value
         self.memory.set_setting("runtime", rt)
         if "chat_model" in patch or "tts_model" in patch:
             self._apply_models(rt)
@@ -351,6 +440,10 @@ class Assistant:
             # com o JARVIS bloqueado, a agenda não sai do núcleo
             "agenda": self.agenda_state() if self.gate.open else None,
             "scenes": self.scenes_state(),
+            # 0.7 (anotações e lista só com o JARVIS liberado, como a agenda)
+            "lists": self.lists.public() if self.gate.open else None,
+            "pomodoro": self.pomodoro.public(),
+            "game": {"on": self.game["on"], "source": self.game["source"]},
             # botões rápidos que existem neste PC (luzes = casa e/ou fita; house = há lâmpadas Tuya)
             "quick": {"lights": self.quick_plan("luzes:on") is not None, "house": bool(self.home.lights()),
                       "leds": self.quick_plan("fita:on") is not None, "door": self.quick_plan("porta:status") is not None},
@@ -385,7 +478,16 @@ class Assistant:
             return label, Plan("lock", [_call("control_device", device_id="fechadura", action=arg)], first)
         return None
 
-    async def run_turn(self, conn: Connection, text: str, source: str = "text", stt: dict[str, Any] | None = None, plan: Plan | None = None) -> None:
+    async def run_remote(self, text: str, origin: str, confirm: Callable[[str], Awaitable[bool]] | None = None, plan: Plan | None = None) -> dict[str, Any]:
+        """Um pedido vindo de fora do PC (celular, Telegram). Devolve a resposta, as ações e as confirmações pedidas."""
+        conn = HeadlessConn(origin, confirm)
+        await self.run_turn(conn, text, origin, plan=plan, speak=False)   # type: ignore[arg-type]
+        out = {"reply": conn.reply, "tools": conn.tools, "asked": conn.asked}
+        await self.broadcast({"type": "remote", "origin": origin, "text": text[:200], "reply": out["reply"][:300], "tools": out["tools"]})
+        return out
+
+    async def run_turn(self, conn: Connection, text: str, source: str = "text", stt: dict[str, Any] | None = None, plan: Plan | None = None,
+                       speak: bool | None = None) -> None:
         turn = uuid.uuid4().hex[:10]
         text = text.strip()[:4000]
         shown = text or "Jarvis"
@@ -403,7 +505,7 @@ class Assistant:
             plan = Plan("ack", render=lambda _o, title: f"Pois não, {title}?")   # disse só "Jarvis"
         elif rt.get("router_mode", "local_first") == "local_first":
             plan = self.router.match(text)
-        speak = bool(rt["speak"]) and self.tts.resolve(rt["tts_engine"]) is not None
+        speak = bool(rt["speak"] if speak is None else speak) and self.tts.resolve(rt["tts_engine"]) is not None
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         speaker = asyncio.create_task(self._speak_worker(conn, turn, queue, rt, marks, prefer_local=plan is not None)) if speak else None
         chunker = SentenceChunker()
@@ -454,7 +556,10 @@ class Assistant:
         async def execute(call: ToolCall) -> ToolOutcome:
             label = self.tools.label(call.name)
             await conn.send({"type": "tool", "stage": "start", "turn": turn, "id": call.id, "name": call.name, "label": label, "args": call.args})
-            out = await self.tools.execute(call, conn.confirm, conn.send)
+            if call.name in getattr(conn, "deny", ()):
+                out = ToolOutcome(call, False, False, f"{label}: só no próprio computador, não pelo {getattr(conn, 'origin', 'acesso remoto')}.")
+            else:
+                out = await self.tools.execute(call, conn.confirm, conn.send)
             await asyncio.to_thread(self.memory.log_action, call.name, call.args, ok=out.ok, executed=out.executed, simulated=out.simulated, summary=out.summary)
             entry = {"id": call.id, "name": call.name, "label": label, "args": call.args, "ok": out.ok, "executed": out.executed, "simulated": out.simulated, "summary": out.summary}
             tool_log.append(entry)
@@ -719,10 +824,172 @@ class Assistant:
             return None
 
         rt = self.runtime()
-        weather, news = await asyncio.gather(self.weather.get(), self.news.get() if self.news.enabled else nothing())
+        want = tuple(k for k, flag in (("usd", "bulletin_usd"), ("btc", "bulletin_btc")) if rt.get(flag))
+
+        async def quotes() -> dict[str, Any] | None:
+            return await self.finance.get() if want else None
+
+        async def team() -> str:
+            return (await self.team_news(1))[0] if rt.get("team") else ""
+
+        weather, news, q, team_text = await asyncio.gather(self.weather.get(), self.news.get() if self.news.enabled else nothing(), quotes(), team())
         today = await asyncio.to_thread(self.agenda.today, True)
-        return compose_briefing(local_now(self.settings.location), self.settings.location.city, rt["user_title"], weather, news,
-                                agenda_text=self.agenda.say_day(today), agenda=[Agenda.public(e) for e in today])
+        out = compose_briefing(local_now(self.settings.location), self.settings.location.city, rt["user_title"], weather, news,
+                               agenda_text=self.agenda.say_day(today), agenda=[Agenda.public(e) for e in today])
+        # 0.7: boletim maior — cotações, o time do coração e aniversários de hoje
+        extra = [x for x in (say_quotes(q, want) if q and q.get("ok") else "", team_text) if x]
+        bdays = [e["title"] for e in today if re.search(r"anivers", e["title"], re.IGNORECASE)]
+        if bdays:
+            extra.insert(0, "Hoje tem " + ", ".join(bdays) + ".")
+        if extra:
+            ask = f"Em que posso ajudar, {rt['user_title']}?"
+            body = out["briefing"].removesuffix(ask).strip()
+            out["briefing"] = " ".join([body, *extra, ask]).strip()
+            out["extra"] = extra
+        return out
+
+    # ------------------------------------------------------------------ 0.7: assistente pessoal e computador
+    async def notify_remote(self, text: str) -> None:
+        """Avisos que também vão para fora do PC (Telegram, se configurado)."""
+        for send in list(self.remote):
+            with contextlib.suppress(Exception):
+                await send(text)
+
+    def _free_conn(self) -> Connection | None:
+        return next((c for c in self.conns if c.turn is None or c.turn.done()), None)
+
+    async def say_on_hud(self, text: str, mode: str = "aviso") -> bool:
+        """Fala num HUD aberto (se houver um livre). Devolve se falou."""
+        conn = self._free_conn()
+        if conn is None:
+            return False
+        conn.turn = asyncio.create_task(self.speak_text(conn, f"{mode}-{uuid.uuid4().hex[:6]}", text, mode=mode))
+        return True
+
+    async def team_news(self, n: int = 3) -> tuple[str, list[dict[str, Any]]]:
+        team = self.runtime().get("team", "").strip()
+        if not team:
+            return "Diga qual é o seu time em Configurações → Geral.", []
+        if self._team_news is None or self._team_news[0] != team:
+            self._team_news = (team, NewsService(feeds=[(team, google_news_feed(f'"{team}" futebol', 3))], per_feed=4, max_age_days=3))
+        data = await self._team_news[1].get()
+        items = data.get("items", [])[:n] if data.get("ok") else []
+        if not items:
+            return f"Sem notícias recentes do {team}.", []
+        heads = "; ".join(i["title"].rstrip(".") for i in items)
+        return f"Do {team}: {heads}.", items
+
+    async def week_summary(self) -> str:
+        """Próximos 7 dias: compromissos, aniversários, previsão e pendências — em texto para falar."""
+        now = self.agenda.now()
+        evs = await asyncio.to_thread(self.agenda.occurrences, now.date() + timedelta(days=1), now.date() + timedelta(days=7))
+        title = self.runtime()["user_title"]
+        parts = [f"Resumo da semana, {title}."]
+        bdays = [e for e in evs if re.search(r"anivers", e["title"], re.IGNORECASE)]
+        others = [e for e in evs if e not in bdays]
+        if others:
+            show = "; ".join(f"{spoken_day(e['start'].date(), now.date())}, {e['title']}" for e in others[:6])
+            more = f" e mais {len(others) - 6}" if len(others) > 6 else ""
+            parts.append(f"{len(others)} compromisso{'s' if len(others) > 1 else ''} nos próximos 7 dias: {show}{more}.")
+        else:
+            parts.append("Nenhum compromisso nos próximos 7 dias.")
+        if bdays:
+            parts.append("Aniversários: " + "; ".join(f"{e['title']} ({spoken_day(e['start'].date(), now.date())})" for e in bdays[:4]) + ".")
+        w = await self.weather.get()
+        days = (w.get("forecast") or [])[1:] if w.get("ok") else []
+        if days:
+            hi, lo = max(d["max_c"] for d in days), min(d["min_c"] for d in days)
+            rainy = [d for d in days if (d.get("rain_probability") or 0) >= 60]
+            rain = (" Chuva provável " + ", ".join(spoken_day(date.fromisoformat(d["date"]), now.date()) for d in rainy) + ".") if rainy else " Sem chuva forte prevista."
+            parts.append(f"Tempo nos próximos {len(days)} dias: máximas até {round(hi)} graus e mínimas de {round(lo)}.{rain}")
+        items, notes = self.lists.items(), self.lists.notes_week()
+        pend = []
+        if items:
+            pend.append(f"{len(items)} ite{'ns' if len(items) > 1 else 'm'} na lista de compras")
+        if notes:
+            pend.append(f"{len(notes)} anotaç{'ões' if len(notes) > 1 else 'ão'} da semana")
+        if pend:
+            parts.append("Pendências: " + " e ".join(pend) + ".")
+        return " ".join(parts)
+
+    async def _pomodoro_changed(self, phase: str, info: dict[str, Any]) -> None:
+        title = self.runtime()["user_title"]
+        color = {"foco": "#ffffff", "pausa": "#3cff7a", "pausa longa": "#3ca0ff", "fim": "#ffd9a0"}.get(phase)
+        if color and self.devices.get("leds") is not None:
+            with contextlib.suppress(Exception):
+                await self.devices.command("leds", "color", {"color": color})
+                await self.broadcast({"type": "devices", "devices": self.devices.describe()})
+        text = {"foco": f"Foco, {title}: {info.get('focus_min', 25)} minutos.",
+                "pausa": f"Pausa de {info.get('break_min', 5)} minutos, {title}. Levante e beba água.",
+                "pausa longa": f"Pausa longa, {title}: {info.get('break_min', 5) * 3} minutos.",
+                "fim": f"Pomodoro concluído, {title}: {info.get('cycles', 4)} ciclos de foco."}.get(phase, "")
+        await self.broadcast({"type": "pomodoro", "pomodoro": self.pomodoro.public()})
+        if text and (phase != "foco" or info.get("cycle", 1) > 1):
+            await self.broadcast({"type": "reminder", "text": text})
+            await self.say_on_hud(text, "pomodoro")
+        if phase == "fim":
+            await self.notify_remote(text)
+
+    async def read_selected(self) -> tuple[bool, str]:
+        if self.screen is None or self.clipboard is None:
+            return False, "Ler o texto selecionado só funciona no Windows."
+        return await asyncio.to_thread(read_selection, self.screen, self.clipboard)
+
+    async def set_game_mode(self, on: bool, source: str) -> None:
+        was = self.game["on"]
+        self.game.update(on=on, source=source if on else "", miss=0)
+        if on == was:
+            return
+        await self.broadcast({"type": "ui", "action": "game", "on": on, "source": source})
+        color = self.runtime().get("game_led") or ""
+        if on and color and self.devices.get("leds") is not None:
+            with contextlib.suppress(Exception):
+                await self.devices.command("leds", "color", {"color": color})
+
+    async def check_game(self) -> bool | None:
+        """Jogo em primeiro plano liga o modo jogo; ao sair (2 leituras seguidas), desliga. None = nada mudou."""
+        if self.screen is None or not self.runtime().get("game_auto", True):
+            return None
+        path = await asyncio.to_thread(self.screen.foreground_path)
+        playing = is_game(path, self.perms.games)
+        if playing and not self.game["on"]:
+            await self.set_game_mode(True, "auto")
+            return True
+        if not playing and self.game["on"] and self.game["source"] == "auto":
+            self.game["miss"] += 1
+            if self.game["miss"] >= 2:
+                await self.set_game_mode(False, "auto")
+                return False
+        elif playing:
+            self.game["miss"] = 0
+        return None
+
+    async def _game_loop(self) -> None:
+        while True:
+            await asyncio.sleep(5)
+            with contextlib.suppress(Exception):
+                await self.check_game()
+
+    async def run_week_summary(self, now: datetime | None = None) -> str | None:
+        """Domingo à noite (ajustável): fala o resumo da semana no HUD e manda para fora (Telegram)."""
+        cfg = self.runtime().get("week_summary") or {}
+        if not cfg.get("on", True):
+            return None
+        now = now or self.agenda.now()
+        hh, mm = (int(x) for x in str(cfg.get("at", "20:00")).split(":"))
+        start = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        key = now.date().isoformat()
+        if now.weekday() != int(cfg.get("day", 6)) or not (start <= now < start + timedelta(minutes=3)) or key in self._week_done:
+            return None
+        self._week_done.add(key)
+        text = await self.week_summary()
+        await self.notify_remote(text)
+        if self.gate.open:
+            await self.broadcast({"type": "reminder", "text": "Resumo da semana: " + text.split(".", 1)[1].strip()[:160]})
+            await self.say_on_hud(text, "semana")
+        else:
+            await self.broadcast({"type": "reminder", "text": "O resumo da semana está pronto: entre para ouvir."})
+        return text
 
     # ------------------------------------------------------------------ cenas (0.6)
     def scene_schedules(self) -> dict[str, dict[str, Any]]:
@@ -767,6 +1034,7 @@ class Assistant:
 
             out = await self.tools.execute(ToolCall(f"cena-{rid}", "run_routine", {"routine_id": rid}), deny, self.broadcast)
             await self.broadcast({"type": "reminder", "text": f"Cena agendada — {out.summary}"})
+            await self.notify_remote(f"Cena agendada — {out.summary}")
             # bloqueado: só o cumprimento; o resumo (com a agenda) fica para depois da entrada
             speech = " ".join(out.data.get("speech", [])) if self.gate.open else ""
             conn = next((c for c in self.conns if c.turn is None or c.turn.done()), None)
@@ -823,7 +1091,10 @@ class Assistant:
             with contextlib.suppress(Exception):
                 await self.run_scheduled_scenes()
             with contextlib.suppress(Exception):
+                await self.run_week_summary()
+            with contextlib.suppress(Exception):
                 for text in await self.check_lock():
+                    await self.notify_remote("🚪 " + text)
                     for conn in list(self.conns):
                         with contextlib.suppress(Exception):
                             await conn.send({"type": "reminder", "text": text, "event": None})
@@ -839,6 +1110,8 @@ class Assistant:
                 title = self.runtime()["user_title"]
                 text = (f"{title.capitalize()}, você tem um lembrete." if private
                         else f"Lembrete, {title}: {ev['title']}, em {mins} minuto{'s' if mins > 1 else ''}.")
+                # fora do PC (Telegram do próprio usuário) vai o título: o bloqueio do HUD protege a tela, não o dono
+                await self.notify_remote(f"⏰ {ev['title']}, em {mins} minuto{'s' if mins > 1 else ''}.")
                 for conn in list(self.conns):
                     with contextlib.suppress(Exception):
                         await conn.send({"type": "reminder", "text": text, "event": None if private else Agenda.public(ev)})

@@ -23,6 +23,7 @@ from .assistant import MAX_AUDIO_BYTES, VERSION, Assistant, Connection
 from .config import PROJECT_DIR, Settings, load_settings
 from .security.permissions import LocalAuth
 from .voice.tts import TTSError
+from .mobile import DeviceStore, MobileGateway, qr_svg
 
 OPEN_PATHS = {"/api/health", "/api/session"}
 #: com a entrada por rosto ativa e o JARVIS bloqueado, só isto responde
@@ -37,15 +38,25 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
     settings = settings or load_settings()
     core = assistant or Assistant(settings)
     auth = LocalAuth(settings.local_token, settings.origins(), settings.port)
+    # 0.7: JARVIS no celular — servidor separado, só sobe se o usuário ligar (Configurações → Sistema)
+    memdb = str(settings.db_path) == ":memory:"
+    devices_store = DeviceStore(None if memdb else settings.db_path.parent / "aparelhos.json")
+    gateway = MobileGateway(core, devices_store, host=os.getenv("JARVIS_MOBILE_HOST", "0.0.0.0").strip() or "0.0.0.0",
+                            port=int(os.getenv("JARVIS_MOBILE_PORT", "8766") or 8766))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         await core.startup()
+        with contextlib.suppress(Exception):
+            await gateway.apply()
         yield
+        if gateway.server is not None:
+            await gateway.server.stop()
         await core.shutdown()
 
     app = FastAPI(title="JARVIS Core", version=VERSION, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.core, app.state.auth, app.state.settings = core, auth, settings
+    app.state.mobile = gateway
 
     def cors(origin: str | None) -> dict[str, str]:
         if origin and origin in auth.origins:
@@ -90,7 +101,49 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
     @app.post("/api/settings")
     async def update_settings(patch: dict[str, Any]) -> dict[str, Any]:
         await asyncio.to_thread(core.update_runtime, patch)
+        if "mobile_enabled" in patch:
+            await gateway.apply()
         return await core.state()
+
+    # ------------------------------------------------------------------ celular (0.7)
+    @app.get("/api/mobile")
+    async def mobile_status() -> dict[str, Any]:
+        return gateway.status()
+
+    @app.post("/api/mobile/pair")
+    async def mobile_pair() -> dict[str, Any]:
+        st = gateway.status()
+        if not st["running"]:
+            raise HTTPException(status_code=400, detail={"message": gateway.error or "Ligue o acesso pelo celular primeiro."})
+        code = devices_store.new_code()
+        url = f"{st['urls'][0]}#pair={code['code']}" if st["urls"] else ""
+        return {**code, "url": url, "urls": st["urls"], "qr": qr_svg(url) if url else ""}
+
+    @app.get("/api/telegram")
+    async def telegram_status() -> dict[str, Any]:
+        return core.telegram.status() if core.telegram else {"configured": False, "running": False, "paired": False, "bot": "", "error": ""}
+
+    @app.post("/api/telegram/{action}")
+    async def telegram_action(action: str) -> dict[str, Any]:
+        if core.telegram is None:
+            raise HTTPException(status_code=400, detail={"message": "Coloque TELEGRAM_BOT_TOKEN no backend\\.env e reinicie o JARVIS."})
+        if action == "pair":
+            return core.telegram.new_code()
+        if action == "unpair":
+            core.telegram.unpair()
+            return core.telegram.status()
+        if action == "test":
+            if not core.telegram.status()["paired"]:
+                raise HTTPException(status_code=400, detail={"message": "Pareie o Telegram primeiro."})
+            await core.telegram.send("Teste do JARVIS: os avisos chegam aqui.")
+            return {"ok": True}
+        raise HTTPException(status_code=400, detail={"message": "Ação desconhecida."})
+
+    @app.delete("/api/mobile/devices/{device_id}")
+    async def mobile_remove(device_id: str) -> dict[str, Any]:
+        if not devices_store.remove(device_id):
+            raise HTTPException(status_code=404, detail={"message": "Aparelho não encontrado."})
+        return gateway.status()
 
     @app.get("/api/weather")
     async def weather(force: bool = False) -> dict[str, Any]:

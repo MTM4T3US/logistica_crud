@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#04122e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<title>JARVIS</title>
+<style>
+  :root { --bg: #020817; --panel: #071a3f; --line: rgba(96, 196, 255, .35); --cy: #8fd8ff; --hi: #e6f7ff; --dim: #86a6c8; --ok: #5dffc0; --amber: #ffc46b; --err: #ff8a5c; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: radial-gradient(120% 60% at 50% 0%, #0b2a66 0%, var(--bg) 60%); color: var(--hi); min-height: 100%;
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  body { padding: max(14px, env(safe-area-inset-top)) 14px max(24px, env(safe-area-inset-bottom)); }
+  header { display: flex; align-items: center; gap: 10px; margin: 2px 2px 14px; }
+  header .ring { width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--cy); box-shadow: 0 0 14px rgba(80, 190, 255, .7), inset 0 0 10px rgba(80, 190, 255, .5); }
+  header h1 { margin: 0; font-size: 17px; letter-spacing: .32em; font-weight: 700; }
+  header small { display: block; color: var(--dim); letter-spacing: .08em; font-size: 12px; }
+  header .dot { margin-left: auto; width: 10px; height: 10px; border-radius: 50%; background: var(--err); box-shadow: 0 0 8px currentColor; color: var(--err); }
+  header .dot.on { background: var(--ok); color: var(--ok); }
+  section { background: linear-gradient(180deg, rgba(10, 36, 90, .82), rgba(5, 18, 50, .9)); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 0 0 12px; }
+  h2 { margin: 0 0 10px; font-size: 11px; letter-spacing: .24em; color: var(--cy); font-weight: 700; display: flex; justify-content: space-between; }
+  h2 span { color: var(--amber); letter-spacing: .12em; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .grid.two { grid-template-columns: repeat(2, 1fr); }
+  button { font: inherit; color: var(--hi); background: rgba(43, 155, 255, .16); border: 1px solid var(--line); border-radius: 10px; padding: 11px 8px; min-height: 46px; }
+  button:active { background: rgba(43, 155, 255, .4); }
+  button:disabled { opacity: .45; }
+  button.primary { background: #2b9bff; color: #021029; border-color: #2b9bff; font-weight: 700; }
+  button.warn { border-color: rgba(255, 196, 107, .6); color: #ffe2b0; }
+  button.ghost { background: transparent; }
+  .scene { display: flex; flex-direction: column; align-items: center; gap: 2px; font-weight: 600; font-size: 13px; }
+  .scene b { font-size: 20px; line-height: 1; color: var(--cy); }
+  .scene small { font-size: 10px; color: var(--amber); letter-spacing: .08em; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  input, select { font: inherit; color: var(--hi); background: #04102c; border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; min-height: 46px; width: 100%; }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+  .row input { flex: 1; min-width: 0; }
+  .row button { flex: none; }
+  .hint { color: var(--dim); font-size: 12.5px; margin: 8px 0 0; }
+  .log p { margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: rgba(10, 40, 110, .4); }
+  .log p.me { background: rgba(10, 40, 110, .15); color: #9fd2ff; }
+  .log p b { display: block; font-size: 10px; letter-spacing: .18em; color: var(--cy); }
+  .ask { border-color: var(--amber); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid rgba(96, 196, 255, .12); }
+  li:last-child { border-bottom: 0; }
+  li small { color: var(--dim); }
+  li button { min-height: 34px; padding: 4px 10px; }
+  .big { font-size: 26px; font-weight: 700; letter-spacing: .04em; }
+  .muted { color: var(--dim); }
+  .ok { color: var(--ok); } .bad { color: var(--err); } .amb { color: var(--amber); }
+  .hidden { display: none !important; }
+  #toast { position: fixed; left: 14px; right: 14px; bottom: max(16px, env(safe-area-inset-bottom)); background: #0b2a66; border: 1px solid var(--cy); border-radius: 12px; padding: 12px 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, .5); }
+</style>
+</head>
+<body>
+<header>
+  <div class="ring" aria-hidden="true"></div>
+  <div><h1>JARVIS</h1><small id="sub">no celular</small></div>
+  <i class="dot" id="dot" title="Conexão com o PC"></i>
+</header>
+
+<main id="pair" class="hidden">
+  <section>
+    <h2>PAREAR ESTE CELULAR</h2>
+    <p class="muted" style="margin-top:0">No PC: Configurações → Sistema → <b>Celular</b> → “Parear celular”. Leia o QR com a câmera ou digite o código.</p>
+    <label class="muted" for="code">Código de 6 dígitos</label>
+    <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000">
+    <label class="muted" for="name" style="display:block;margin-top:8px">Nome deste aparelho</label>
+    <input id="name" maxlength="40" placeholder="Meu celular">
+    <p><button class="primary" id="pairBtn" style="width:100%">Parear</button></p>
+    <p class="hint">O celular recebe uma chave só dele; o PC guarda apenas uma impressão dela e você pode remover o aparelho no HUD a qualquer momento.</p>
+  </section>
+</main>
+
+<main id="app" class="hidden">
+  <section id="askBox" class="ask hidden">
+    <h2>CONFIRMAR</h2>
+    <p id="askText" style="margin-top:0"></p>
+    <div class="grid two"><button class="primary" id="askYes">Autorizar</button><button id="askNo">Negar</button></div>
+  </section>
+
+  <section>
+    <h2>CONVERSA</h2>
+    <div class="row"><input id="say" placeholder="Fale com o JARVIS…" enterkeyhint="send" autocomplete="off"><button class="primary" id="sayBtn">Enviar</button></div>
+    <div class="row" style="margin-top:8px">
+      <label class="muted" for="voice" style="flex:none">Resposta</label>
+      <select id="voice"><option value="none">só texto</option><option value="phone">com voz no celular</option><option value="pc">falada no PC</option></select>
+    </div>
+    <p class="hint">Para falar, toque no microfone do teclado (ditado). Algumas ações só funcionam no próprio PC.</p>
+    <div class="log" id="log"></div>
+  </section>
+
+  <section>
+    <h2>CENAS <span id="next"></span></h2>
+    <div class="grid" id="scenes"></div>
+  </section>
+
+  <section>
+    <h2>CASA <span id="doorLine"></span></h2>
+    <div class="grid" id="house"></div>
+  </section>
+
+  <section id="pomoBox">
+    <h2>POMODORO</h2>
+    <div class="row"><div style="flex:1"><div class="big" id="pomoTime">—</div><div class="muted" id="pomoPhase">parado</div></div>
+      <button id="pomoBtn">Começar 25/5</button></div>
+  </section>
+
+  <section>
+    <h2>AGENDA</h2>
+    <ul id="agenda"></ul>
+  </section>
+
+  <section>
+    <h2>LISTA DE COMPRAS <span id="shopN"></span></h2>
+    <div class="row"><input id="shopIn" placeholder="ex.: leite, pão e café" enterkeyhint="done"><button id="shopBtn">Pôr</button></div>
+    <ul id="shop" style="margin-top:6px"></ul>
+  </section>
+
+  <section>
+    <h2>ANOTAÇÕES</h2>
+    <div class="row"><input id="noteIn" placeholder="Anotar…" enterkeyhint="done"><button id="noteBtn">Anotar</button></div>
+    <ul id="notes" style="margin-top:6px"></ul>
+  </section>
+
+  <p class="hint" style="text-align:center"><button class="ghost" id="unpair">Esquecer este celular</button></p>
+</main>
+
+<div id="toast" class="hidden" role="status"></div>
+<script src="app.js"></script>
+</body>
+</html>

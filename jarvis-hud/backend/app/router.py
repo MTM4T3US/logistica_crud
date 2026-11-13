@@ -103,8 +103,10 @@ def _launched(spoken: str) -> Callable[[list[ToolOutcome], str], str]:
 
 class LocalRouter:
     def __init__(self, perms: Permissions, tool_names: Callable[[], set[str]], wake_word: str = "jarvis",
-                 lights: Callable[[], list[tuple[str, str]]] | None = None):
+                 lights: Callable[[], list[tuple[str, str]]] | None = None, team: Callable[[], str] | None = None):
         self.perms = perms
+        #: 0.7: o time do coração (Configurações → Geral), para "e o Goiás?"
+        self.team = team or (lambda: "")
         self.tool_names = tool_names
         #: luzes de casa (id, nome) — para "luz da sala"
         self.lights = lights or (lambda: [])
@@ -165,6 +167,10 @@ class LocalRouter:
                 return Plan("lock", [_call("control_device", device_id="fechadura", action="lock")], lambda o, title: o[0].summary)
             if re.search(r"\b(trancad\w*|aberta|estado|status|como esta)\b", t):
                 return Plan("lock", [_call("control_device", device_id="fechadura", action="status")], lambda o, title: o[0].summary)
+        # ---- 0.7: anotações, lista de compras, ler a seleção, Pomodoro, modo jogo, cotações, time, semana
+        plan = self._extras(t, tools)
+        if plan:
+            return plan
         # ---- luzes de casa (Tuya) — "leds"/"fita" continuam indo só para a fita
         if "house_lights" in tools and not re.search(r"\b(led|leds|fita)\b", t) and (
                 re.search(r"\b(luz|luzes|lampada|lampadas|iluminacao|abajur|luminaria)\b", t) or self._light_hits(t)[1] > 0):
@@ -390,6 +396,76 @@ class LocalRouter:
                 raw = self._raw_tail(r"^(.+)$")
                 phrase = raw if raw and parse_event(raw, datetime.now()) is not None else t
                 return Plan("agenda", [_call("agenda_add", phrase=phrase[:200])], lambda o, title: o[0].summary)
+        return None
+
+    def _extras(self, t: str, tools: set[str]) -> Plan | None:
+        say = lambda o, title: o[0].summary   # noqa: E731
+        # ---- lista de compras (antes das anotações: "anota leite na lista" é da lista)
+        if "shop_add" in tools:
+            m = re.match(r"^(?:poe|por|coloca|coloque|adiciona|adicione|bota|inclui|acrescenta|anota)\s+(.+?)\s+na (?:minha )?lista(?: de compras| do mercado)?$", t)
+            if m:
+                raw = self._raw_tail(r"^(?:p[õo]e|p[ôo]r|coloca|coloque|adiciona|adicione|bota|inclui|acrescenta|anota)\s+(.+?)\s+na\s+(?:minha\s+)?lista(?:\s+de\s+compras|\s+do\s+mercado)?[.!]?$")
+                return Plan("lista", [_call("shop_add", items=(raw or m.group(1))[:300])], say)
+            m = re.match(r"^lista de compras[:,]?\s+(.+)$", t)
+            if m:
+                return Plan("lista", [_call("shop_add", items=(self._raw_tail(r"^lista de compras[:,]?\s+(.+)$") or m.group(1))[:300])], say)
+        if "shop_remove" in tools:
+            m = re.match(r"^(?:tira|tire|remove|remova|risca|retira|apaga)\s+(.+?)\s+da (?:minha )?lista(?: de compras| do mercado)?$", t)
+            if m:
+                raw = self._raw_tail(r"^(?:tira|tire|remove|remova|risca|retira|apaga)\s+(.+?)\s+da\s+(?:minha\s+)?lista(?:\s+de\s+compras|\s+do\s+mercado)?[.!]?$")
+                return Plan("lista", [_call("shop_remove", items=(raw or m.group(1))[:300])], say)
+        if "shop_clear" in tools and re.match(r"^(?:limpa|apaga|esvazia|zera)r? (?:a )?(?:minha )?lista(?: de compras| do mercado)?$", t):
+            return Plan("lista", [_call("shop_clear")], say)
+        if "shop_list" in tools and re.search(r"\b(o que tem na (minha )?lista|o que (eu )?(preciso|tenho que|falta) comprar|le a (minha )?lista)\b|^(a |minha )?lista de compras$|^lista do mercado$", t):
+            return Plan("lista", [_call("shop_list")], say)
+        # ---- anotações
+        if "notes_list" in tools and re.search(r"\b(minhas anotacoes|o que (eu )?anotei|le (as )?(minhas )?anotacoes|anotacoes (de hoje|da semana))\b|^anotacoes$", t):
+            period = "semana" if "semana" in t else "todas" if re.search(r"\b(todas|ultimas)\b", t) else "hoje"
+            return Plan("notas", [_call("notes_list", period=period)], say)
+        if "note_remove" in tools:
+            m = re.match(r"^(?:apaga|apague|remove|exclui|tira)r? a anotacao (?:de |do |da |sobre |que )?(.+)$", t)
+            if m:
+                return Plan("notas", [_call("note_remove", query=m.group(1)[:80])], say)
+        if "note_add" in tools:
+            m = re.match(r"^(?:anota|anote|anotar|faz uma anotacao|faca uma anotacao|cria uma nota|nota)(?: ai| isso| que| pra mim| para mim| ai que)*[:,]?\s+(.+)$", t)
+            if m and parse_event(m.group(1), datetime.now()) is None:      # com data/hora é compromisso (agenda)
+                raw = self._raw_tail(r"^(?:anota|anote|anotar|faz uma anota[çc][ãa]o|fa[çc]a uma anota[çc][ãa]o|cria uma nota|nota)(?:\s+a[íi]|\s+isso|\s+que|\s+pra\s+mim|\s+para\s+mim)*[:,]?\s+(.+)$")
+                return Plan("notas", [_call("note_add", text=(raw or m.group(1))[:500])], say)
+        # ---- ler o texto selecionado
+        if "read_selection" in tools and re.fullmatch(r"(le|leia|ler)( isso| esse texto| este texto| o texto( selecionado)?| a selecao| o selecionado| o que (esta|ta) selecionado)?( (pra|para|pro) mim)?( em voz alta)?", t):
+            return Plan("ler", [_call("read_selection")], lambda o, title: o[0].summary if o[0].ok else f"Não consegui, {title}: {o[0].summary}")
+        # ---- Pomodoro (antes da mídia: "pausa" aqui é do Pomodoro)
+        if "pomodoro" in t:
+            if "pomodoro_stop" in tools and re.search(r"\b(para|pare|parar|cancela|cancele|encerra|encerre|desliga|termina|chega de|pausa|pausar|pause)\b( o| esse| este| meu)? pomodoro\b", t):
+                return Plan("pomodoro", [_call("pomodoro_stop")], say)
+            if "pomodoro_status" in tools and re.search(r"\b(falta|faltam|status|como (esta|ta)|quanto tempo)\b", t):
+                return Plan("pomodoro", [_call("pomodoro_status")], say)
+            if "pomodoro_start" in tools:
+                args: dict[str, Any] = {}
+                m = re.search(r"\bde (\d{1,3}) ?(?:min|minutos)\b", t)
+                if m:
+                    args["focus_min"] = max(1, min(120, int(m.group(1))))
+                m = re.search(r"\bpausas? de (\d{1,2})\b", t)
+                if m:
+                    args["break_min"] = max(1, min(60, int(m.group(1))))
+                return Plan("pomodoro", [_call("pomodoro_start", **args)], say)
+        if "pomodoro_status" in tools and re.search(r"\bquanto (tempo )?falta (do|no|pro|para o|pra) (foco|intervalo|descanso)\b", t):
+            return Plan("pomodoro", [_call("pomodoro_status")], say)
+        # ---- modo jogo
+        if "game_mode" in tools and re.search(r"\bmodo (de )?jogo\b", t):
+            off = bool(re.search(r"\b(sai|sair|saia|desliga|desativa|tira|termina|encerra)\w*\b", t))
+            return Plan("jogo", [_call("game_mode", on=not off)], say)
+        # ---- cotações
+        if "get_quotes" in tools and re.search(r"\b(dolar|bitcoin|btc|cotac\w*|cambio)\b", t):
+            which = "bitcoin" if re.search(r"\b(bitcoin|btc)\b", t) and "dolar" not in t else "dolar" if "dolar" in t and not re.search(r"\b(bitcoin|btc)\b", t) else "ambos"
+            return Plan("cotacoes", [_call("get_quotes", which=which)], say)
+        # ---- o time do coração
+        team = fold(self.team() or "")
+        if "team_news" in tools and (re.search(r"\bmeu time\b", t) or (team and re.search(rf"\b{re.escape(team)}\b", t) and re.search(r"\b(jogo|jogou|time|noticias|novidades|resultado|ganhou|perdeu|como (esta|foi|ta)|e o|e a)\b", t))):
+            return Plan("time", [_call("team_news")], say)
+        # ---- resumo da semana
+        if "week_summary" in tools and re.search(r"\b(resumo da semana|minha semana|como (vai ser|sera|esta|fica) (a )?(minha )?semana|semana que vem|proxima semana)\b", t):
+            return Plan("semana", [_call("week_summary")], say)
         return None
 
     ORDINALS = {"primeiro": 1, "segundo": 2, "terceiro": 3, "quarto": 4, "quinto": 5, "sexto": 6, "setimo": 7, "oitavo": 8, "nono": 9, "decimo": 10}

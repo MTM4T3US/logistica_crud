@@ -137,6 +137,8 @@ class Permissions:
     close_windows: bool = False
     #: 0.5 — controle amplo do computador (escolha do usuário: amplo com confirmação). false desliga cada parte.
     pc: dict[str, bool] = field(default_factory=lambda: dict(PC_DEFAULTS))
+    #: 0.7 — executáveis que contam como jogo (além das pastas da Steam, Epic, Riot…)
+    games: tuple[str, ...] = ()
     source: str = "padrão (vazio)"
 
     @classmethod
@@ -185,6 +187,7 @@ class Permissions:
         perms.close_windows = bool(raw.get("close_windows", False))
         pc = raw.get("pc_control") if isinstance(raw.get("pc_control"), dict) else {}
         perms.pc = {k: bool(pc.get(k, v)) for k, v in PC_DEFAULTS.items()}
+        perms.games = tuple(str(x).strip()[:60] for x in (raw.get("jogos") or []) if isinstance(x, str) and x.strip())[:50]
         return perms
 
     def summary(self) -> dict[str, Any]:
