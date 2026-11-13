@@ -1,7 +1,7 @@
-# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.6.1
+# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.7
 
 > Cole TUDO abaixo da linha em uma sessão do Claude Code (app Claude Desktop ou terminal) aberta
-> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.6.1.zip`
+> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.7.0.zip`
 > (se a 0.3 já estava instalada: descompacte por cima, mantendo `backend\.env`, `backend\config\permissions.json` e `backend\data\`)
 > (ou clonou o branch `ccr-41dc01f1-0wlbjp` do repositório MTM4T3US/logistica_crud — a pasta é `jarvis-hud`).
 > Antes de colar: crie `jarvis-hud\backend\.env` a partir de `.env.example` e cole **você mesmo** a
@@ -12,13 +12,21 @@
 Você é o engenheiro de testes do JARVIS OS 0.6 neste computador Windows. O código foi escrito e
 testado em Linux na nuvem (testes automatizados, navegador headless com câmera falsa). As versões 0.3 a 0.5.2
 já foram testadas neste PC por sessões anteriores: reaproveite os relatórios delas e **foque nas fases novas
-(17 a 20)**, depois nas pendências da 0.5.3 (abaixo), repetindo só o que a atualização pode ter afetado.
+(17 a 25)**, depois nas pendências da 0.5.3 (abaixo), repetindo só o que a atualização pode ter afetado.
 
 **Esta versão já inclui TODAS as suas correções** — da 0.3, da 0.4 e do teste da 0.5.2 (os patches
 `jarvis-0.4-windows.patch` e `jarvis-0.5.2-windows-teste.patch` foram aplicados; seus relatórios estão em
 `docs\RELATORIO_WINDOWS_0.3/0.4/0.5.md`). **Não reaplique patches nem refaça correções à mão.**
 
-Novidades da 0.6.1 (fase 20) — confira primeiro:
+Novidades da 0.7 (fases 21 a 25) — confira primeiro:
+- **Atualizador:** `ATUALIZAR.bat` (arrastar o zip em cima). **Use-o para instalar esta versão por cima da que já
+  está no PC** (fase 21), em vez de descompactar à mão.
+- **Celular** na rede de casa (QR), **Telegram** (bot do usuário), **Tailscale** para fora de casa.
+- **Assistente:** lista de compras, anotações, dólar/Bitcoin, time, aniversários, resumo da semana.
+- **Computador:** Pomodoro com a fita, "lê pra mim", modo jogo automático, gestos com a câmera.
+- **Visual:** chuva e noite no mapa, descanso de tela, núcleo que muda de cor.
+
+Novidades da 0.6.1 (fase 20):
 - **Entrada só pelo rosto:** não pede mais piscada (opção em Configurações → Entrada); câmera automática opcional.
 - **Cidade redesenhada:** ruas de asfalto, casas ilustrativas nas quadras, prédios mapeados com contorno, árvores, rio,
   carros, nomes dos pontos de referência.
@@ -376,9 +384,96 @@ Para cada cena, por voz ou texto **e** pelo botão em CENAS:
    - meça o FPS em 1080p no repouso e no mapa (Medir 30 s), em "Média" e em "Alta";
    - recomende a melhor para a RTX 2050.
 
+## FASE 21 — Atualizador (0.7)
+
+1. A pasta instalada ainda não tem o atualizador (ele é novo). Só desta vez, copie do zip para a pasta instalada:
+   - `jarvis-hud\ATUALIZAR.bat`;
+   - `jarvis-hud\backend\scripts\atualizar.py`.
+
+   Depois, com o JARVIS fechado, arraste `jarvis-os-0.7.0.zip` em cima do `ATUALIZAR.bat`. Anote:
+   - versão antes e depois;
+   - quantos arquivos trocou;
+   - onde ficou o backup (`backend\data\atualizacoes\`).
+2. Confira que continuam iguais:
+   - a `backend\.env` (só confira que a chave ainda está lá, **sem mostrar**);
+   - o `permissions.json`;
+   - o rosto cadastrado;
+   - a agenda;
+   - o mapa.
+3. Com o JARVIS aberto, rode de novo: ele deve recusar ("Feche-o antes").
+4. Teste `ATUALIZAR.bat --voltar` e depois atualize de novo para a 0.7.
+
+## FASE 22 — Celular e Tailscale (0.7)
+
+1. Configurações → Sistema → CELULAR → ligar. Quando o Windows perguntar sobre a rede, permita **só em redes
+   privadas** (com o usuário). Anote o endereço mostrado.
+2. "Parear celular": o usuário lê o QR com o celular (mesmo Wi-Fi). Teste no celular:
+   - uma cena;
+   - "Saindo" (deve pedir confirmação);
+   - Acender e Apagar;
+   - "Porta?";
+   - pôr e tirar item da lista;
+   - anotar;
+   - conversa por texto ("que horas são");
+   - resposta "falada no PC" e "com voz no celular".
+3. Pelo celular, peça "digita oi" e "tira um print": devem ser **recusados** ("só no próprio computador").
+4. Remova o aparelho no HUD e confira que o celular perde o acesso (volta para a tela de pareamento).
+5. Se o usuário quiser: Tailscale no PC e no celular, e o mesmo teste com o celular **fora** do Wi-Fi (4G), pelo
+   endereço 100.x. **Nunca** abra portas no roteador.
+
+## FASE 23 — Telegram (0.7)
+
+1. Guie o usuário pelo @BotFather (`docs\TAILSCALE_E_TELEGRAM.md`). **Ele mesmo** cola o token no `.env`; não
+   mostre nem copie o token.
+2. Reinicie o JARVIS → Sistema → TELEGRAM → Gerar código → `/parear CÓDIGO` no bot.
+3. Teste:
+   - "modo foco";
+   - `/cenas` e um botão;
+   - "limpa a lista" (botões Sim/Não);
+   - "a porta está trancada?";
+   - "quanto está o dólar?";
+   - `/semana`.
+4. Avisos: marque um compromisso para daqui a 16 minutos e confira o lembrete no Telegram. Com a fechadura pareada,
+   uma abertura pelo teclado deve gerar aviso.
+5. Com outra conta do Telegram (se houver), mande uma mensagem ao bot: **não** pode responder.
+
+## FASE 24 — Computador e assistente (0.7)
+
+1. "põe leite, pão e café na lista", "tira o pão da lista", "o que tem na lista?". Depois "anota: teste do JARVIS",
+   "minhas anotações".
+2. "começa um pomodoro de 2 minutos com pausa de 1": a fita fica branca e depois verde, com aviso falado e o tempo no
+   topo. "para o pomodoro".
+3. "Lê pra mim":
+   - selecione um parágrafo no Bloco de Notas e diga "lê pra mim": deve ler, e a área de transferência deve voltar ao que era;
+   - num terminal: deve recusar.
+4. **Modo jogo:**
+   - abra um jogo da Steam/Epic/Riot (se houver): o HUD deve pausar (GPU do navegador cai no Gerenciador de Tarefas)
+     e voltar ao sair do jogo;
+   - teste também "modo jogo" / "sai do modo jogo".
+5. **Gestos** (com o usuário, câmera): ligue em Sistema → COMPUTADOR. Teste cada gesto:
+   - ✋ com uma música tocando;
+   - 👍 e 👎 para o volume;
+   - ✌ para a próxima faixa.
+
+   Anote quantas tentativas cada um precisou. Desligue: a luz da câmera deve apagar.
+6. **Boletim:**
+   - em Geral → BOLETIM, ponha o time do usuário;
+   - teste "quanto está o dólar?" e "e o meu time?";
+   - teste a entrada (boas-vindas com o dólar).
+
+## FASE 25 — Visual (0.7)
+
+1. "mostra o mapa" à noite (ou de dia, anotando): janelas acesas e céu escuro à noite. Se chover em Itumbiara no
+   dia, confira a chuva.
+2. Descanso de tela: Sistema → COMPUTADOR → 2 minutos; fique 2 min parado; deve aparecer o relógio grande e
+   sumir ao mexer o mouse.
+3. Núcleo: um comando que funciona (pulso verde), um que pede confirmação (âmbar enquanto espera) e um que falha
+   (avermelhado).
+4. FPS no repouso e no mapa (Medir 30 s), comparando com a 0.6.1.
+
 ## Entrega
 
-Crie `jarvis-hud\docs\RELATORIO_WINDOWS_0.6.md` com:
+Crie `jarvis-hud\docs\RELATORIO_WINDOWS_0.7.md` com:
 
 1. Tabela por item: Fase · Teste · Status (REAL-OK / REAL-FALHOU / SÓ-API / SIMULADO / NÃO-TESTADO) · Evidência.
 2. Problemas encontrados e correções aplicadas (arquivo e motivo).

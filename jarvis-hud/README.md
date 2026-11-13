@@ -1,4 +1,4 @@
-# JARVIS OS 0.6.1
+# JARVIS OS 0.7
 
 Assistente pessoal com interface holográfica: um HUD em React + Three.js e um núcleo local em
 Python (FastAPI) que conversa pelo Google Gemini, fala, ouve e consulta dados reais do
@@ -6,10 +6,10 @@ computador e de Itumbiara-GO.
 
 Esta pasta é independente do CRUD de logística que está na raiz do repositório.
 
-> **Estado (0.6.1):** escrita em Linux na nuvem (319 testes automáticos do núcleo e o teste de navegador com 18
-> verificações). As versões 0.3 a 0.5.2 já foram testadas no seu Windows pelo outro chat; o app da bandeja,
-> as cenas e o HUD novo da 0.6 ainda não. Roteiro: [`docs/PROMPT_TESTE_WINDOWS.md`](docs/PROMPT_TESTE_WINDOWS.md);
-> o que mudou e o que falta: [`docs/RELATORIO_0.6.md`](docs/RELATORIO_0.6.md).
+> **Estado (0.7):** escrita em Linux na nuvem (368 testes automáticos do núcleo e o teste de navegador com 21
+> verificações). As versões 0.3 a 0.5.2 já foram testadas no seu Windows pelo outro chat; da 0.6 em diante, ainda não.
+> Roteiro: [`docs/PROMPT_TESTE_WINDOWS.md`](docs/PROMPT_TESTE_WINDOWS.md); o que mudou e o que falta:
+> [`docs/RELATORIO_0.7.md`](docs/RELATORIO_0.7.md).
 
 ## O que é real e o que é simulado
 
@@ -33,6 +33,10 @@ Esta pasta é independente do CRUD de logística que está na raiz do repositór
 | Fechadura (0.5) | Só trancar e ver o estado, protocolo assinado ([`docs/FECHADURA.md`](docs/FECHADURA.md)); simulador até parear. |
 | App do Windows (0.6) | Ícone na bandeja, iniciar com o Windows, atalhos globais (`Ctrl+Alt+J` abre, `Ctrl+Alt+Espaço` fala), janela própria sem barra do navegador. |
 | Cenas (0.6) | "Bom dia", "modo cinema", "modo foco", "boa noite", "estou saindo": luzes de casa + fita + volume + porta + resumo, por voz, botão ou horário. |
+| Celular e Telegram (0.7) | Página do celular na rede de casa (pareada por QR) e bot do Telegram de qualquer lugar; fora de casa pelo Tailscale. Nada de tela, teclado ou destrancar de fora do PC. Guia: [`docs/TAILSCALE_E_TELEGRAM.md`](docs/TAILSCALE_E_TELEGRAM.md). |
+| Assistente (0.7) | Lista de compras, anotações, dólar/Bitcoin, notícias do seu time, aniversários, resumo da semana. |
+| Computador (0.7) | Pomodoro com a fita, "lê pra mim", modo jogo automático (HUD pausa a placa de vídeo), gestos com a câmera (opcional). |
+| Visual (0.7) | Chuva e noite de verdade no mapa, descanso de tela, núcleo que muda de cor conforme a resposta. |
 | Mapa 3D | Itumbiara real (OpenStreetMap, baixado uma vez e guardado no PC): ruas, rio, praças, prédios mapeados e pontos de referência com nome. Desde a 0.6.1 as quadras recebem **casas ilustrativas** de frente para as ruas reais (o OSM de Itumbiara quase não tem casas desenhadas), avisado na tela. Sem o mapa baixado: cidade fictícia, identificada na tela. |
 | Notícias | Google Notícias de Itumbiara e do Brasil (feeds RSS, sem inventar manchetes). `JARVIS_NEWS_FEEDS=off` desliga. |
 
@@ -56,7 +60,11 @@ Depois, use o **app** (0.6):
 4. "Iniciar com o Windows" também fica em Configurações → Sistema. Ao iniciar com o Windows, só o ícone aparece; o
    HUD abre pelo atalho. Registro em `backend\data\jarvis.log`.
 
-O `INICIAR.bat` continua valendo para instalar, atualizar e ver o núcleo num console.
+O `INICIAR.bat` continua valendo para instalar e ver o núcleo num console.
+
+**Atualizar (0.7):** feche o JARVIS e **arraste o zip da versão nova em cima do `ATUALIZAR.bat`**. Ele guarda a versão
+atual, troca só o código (a sua `.env`, as permissões, o rosto, a agenda, as listas e o mapa ficam), reinstala e
+recompila. Deu errado? `ATUALIZAR.bat --voltar`.
 
 Para ativar a IA:
 
@@ -124,6 +132,9 @@ ainda não é confiável); para mais segurança, desmarque "Entrar só pelo rost
 - **Ajuda (`?`):** atalhos e exemplos do que dizer.
 - **Teclas:** `M` falar · `Ctrl+M` microfone · `Esc` parar/fechar · `L` histórico · `?` ajuda · `H` ocultar a
   interface · `F` tela cheia · `1`–`6` estados de demonstração · `D` sequência demo.
+- **Novidades da 0.7 por voz:** "põe leite na lista", "anota: ligar para o banco", "começa um pomodoro", "lê pra mim",
+  "modo jogo", "quanto está o dólar?", "e o meu time?", "resumo da semana". Celular, Telegram, gestos, modo jogo e
+  descanso de tela ficam em Configurações → Sistema; boletim e resumo em Geral; lista e anotações em Agenda.
 
 À esquerda ficam clima, agenda do dia e dispositivos; à direita, cenas, casa e **Comandos executados**
 (✓ executado, ✕ recusado ou falhou, SIM só no simulador); nos cantos, hora e estado do sistema; embaixo, a
@@ -193,6 +204,7 @@ VALIDAR_GEMINI.bat
 ```
 backend/app/            núcleo: main, assistant, desktop_app (bandeja), ai/, voice/, system/, services/, devices/, memory/, security/
 backend/jarvis_app.pyw  app do Windows (pythonw, sem console): bandeja, atalhos globais, iniciar com o Windows
+backend/app/mobile.py   servidor do celular (0.7) · app/static/mobile/ página do celular · services/telegram.py bot
 backend/config/         permissions.example.json (lista de apps, pastas e rotinas autorizados)
 backend/scripts/        validar_gemini.py · diagnostico.py · baixar_modelos.py · teste_led.py · baixar_mapa.py
 backend/tests/          testes automatizados
@@ -207,6 +219,8 @@ evidence/               capturas da 0.1, 0.2 e 0.2.1; amostras de voz em evidenc
 
 ## Documentação
 
+- [`docs/RELATORIO_0.7.md`](docs/RELATORIO_0.7.md) — celular, Telegram, assistente, computador, visual e atualizador.
+- [`docs/TAILSCALE_E_TELEGRAM.md`](docs/TAILSCALE_E_TELEGRAM.md) — celular em casa, fora de casa (Tailscale) e Telegram.
 - [`docs/RELATORIO_0.6.md`](docs/RELATORIO_0.6.md) — app do Windows, cenas da casa e o HUD novo.
 - [`docs/RELATORIO_0.5.md`](docs/RELATORIO_0.5.md) — computador, computer use, agenda, luzes de casa e fechadura.
 - [`docs/FECHADURA.md`](docs/FECHADURA.md) — protocolo da fechadura própria (só trancar e ver).

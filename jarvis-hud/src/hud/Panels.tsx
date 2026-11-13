@@ -86,7 +86,7 @@ export function Dock() {
             {q.house && q.leds && <button disabled={!online} onClick={() => go('fita:off')} title="Desligar só a fita de LED"><StripIcon /><span>Fita</span></button>}
             {q.door && <button disabled={!online} onClick={() => go('porta:status')} title="Ver se a porta está trancada"><EyeIcon /><span>Porta?</span></button>}
             {q.door && <button disabled={!online} onClick={() => go('porta:lock')} title="Trancar a porta (destrancar não existe aqui)"><LockIcon /><span>Trancar</span></button>}
-            {q.door && <button disabled={!online} className="warn" onClick={() => go('porta:lockdown')} title="Modo trancado: app e rosto não abrem; só o teclado"><ShieldIcon /><span>Trancado</span></button>}
+            {q.lockdown && <button disabled={!online} className="warn" onClick={() => go('porta:lockdown')} title="Modo trancado: app e rosto não abrem; só o teclado"><ShieldIcon /><span>Trancado</span></button>}
           </div>
         </>
       )}
@@ -187,6 +187,8 @@ const SAY: [string, string[]][] = [
   ['Computador', ['“abre o Word”, “fecha o Spotify”', '“pesquisa receita de bolo no YouTube”', '“brilho da tela em 60”, “volume 30”, “desliga o PC em 10 minutos”']],
   ['Agenda', ['“marca dentista amanhã às 15h”', '“o que eu tenho hoje?”, “desmarca o dentista”']],
   ['Cidade', ['“como está o tempo?”, “novidades de Itumbiara”', '“mostra o mapa”']],
+  ['Assistente', ['“põe leite e pão na lista”, “o que tem na lista?”', '“anota: ligar para o banco”, “minhas anotações”', '“quanto está o dólar?”, “e o meu time?”, “resumo da semana”']],
+  ['Foco e jogo', ['“começa um pomodoro”, “quanto falta?”, “para o pomodoro”', '“lê pra mim” (lê o texto selecionado)', '“modo jogo”, “sai do modo jogo”']],
 ]
 
 export function Help() {

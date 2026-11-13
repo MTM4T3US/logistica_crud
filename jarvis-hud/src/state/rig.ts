@@ -40,6 +40,14 @@ export const rig = {
   /** entrada real: progresso 0..1 e confirmação vinda do núcleo */
   faceScan: 0,
   faceOk: false,
+  /** 0.7 — humor do núcleo: pulso verde (feito) e âmbar (aviso/confirmação); o vermelho é o errorT */
+  okT: 0,
+  warnT: 0,
+  okUntil: 0,
+  warnUntil: 0,
+  /** 0..1: noite real em Itumbiara (mapa) e chuva agora */
+  nightT: 0,
+  rainT: 0,
 }
 
 export const damp = (cur: number, target: number, lambda: number, dt: number) =>

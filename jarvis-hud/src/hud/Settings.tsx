@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { audio } from '../core/audio'
-import { api, deleteMusic, enrollFace, faceEnable, faceForget, lockNow, playSample, quickAction, refresh, saveSettings, setMuted, setWake, testIntro, uploadMusic } from '../core/backend'
+import { api, deleteMusic, enrollFace, faceEnable, faceForget, lockNow, playSample, quickAction, refresh, saveSettings, sendText, setMuted, setWake, testIntro, uploadMusic } from '../core/backend'
 import { useJarvis, type CoreState, type SceneData, type SceneSchedule } from '../state/jarvis'
 import { SceneIcon } from './icons'
 import { prettyKeys, shortName } from './Panels'
@@ -130,6 +130,7 @@ export function Settings() {
             <p className={core.voice.stt_cloud ? 'warn' : 'good'}>{core.voice.stt_active ? (core.voice.stt_cloud ? 'Transcrição atual: NUVEM (Gemini). Na escuta contínua, toda fala detectada é enviada.' : 'Transcrição atual: local — o áudio não sai do computador.') : 'Transcrição desligada.'}</p>
             <p className={core.voice.tts_cloud ? 'warn' : 'good'}>{core.voice.tts_active ? (core.voice.tts_cloud ? 'Voz atual: NUVEM (o texto das respostas é enviado ao Gemini TTS).' : 'Voz atual: local.') : 'Voz desligada.'}</p>
           </section>
+          <BulletinSection />
         </>
       )}
 
@@ -273,8 +274,8 @@ export function Settings() {
         </>
       )}
       {core && tab === 'entrada' && <Entrance core={core} />}
-      {core && tab === 'agenda' && <AgendaSection />}
-      {tab === 'sistema' && online && <AppSection />}
+      {core && tab === 'agenda' && <><AgendaSection /><ListsSection /></>}
+      {tab === 'sistema' && online && <><AppSection /><PhoneSection /><TelegramSection /><ComputerSection /></>}
 
       {tab === 'sistema' && <section>
         <h3>DESEMPENHO</h3>
@@ -601,9 +602,185 @@ function AppSection() {
             <label className="check"><input type="checkbox" checked={!!info.autostart} onChange={(e) => void toggle(e.target.checked)} />Iniciar com o Windows (só o ícone da bandeja; o HUD abre pelo atalho)</label>
           ) : <p className="dim">Iniciar com o sistema e atalhos globais só existem no Windows.</p>}
           <p className="dim">Atalhos globais: {prettyKeys(info.hotkeys.open)} abre o JARVIS · {prettyKeys(info.hotkeys.talk)} fala com ele. Troque em backend\.env (JARVIS_HOTKEY_OPEN, JARVIS_HOTKEY_TALK).</p>
+          <p className="dim">Versão {useJarvis.getState().core?.version}. Para atualizar: feche o JARVIS e arraste o zip novo em cima do <b>ATUALIZAR.bat</b> (seus dados, rosto e configurações ficam). Para voltar: ATUALIZAR.bat --voltar.</p>
           {msg && <p className="good">{msg}</p>}
         </>
       )}
+    </section>
+  )
+}
+
+
+/* =====================================================================================  0.7  */
+const WEEK = ['segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo']
+
+/** Boletim das boas-vindas (cotações, time) e resumo da semana. */
+function BulletinSection() {
+  const rt = useJarvis((s) => s.core?.runtime)
+  const [team, setTeam] = useState(rt?.team ?? '')
+  const [msg, setMsg] = useState('')
+  useEffect(() => { setTeam(rt?.team ?? '') }, [rt?.team])
+  if (!rt) return null
+  const save = (patch: Record<string, unknown>) => saveSettings(patch).then(() => setMsg('')).catch((e) => setMsg((e as Error).message))
+  const ws = rt.week_summary ?? { on: true, day: 6, at: '20:00' }
+  return (
+    <section>
+      <h3>BOLETIM E RESUMO</h3>
+      <label className="check"><input type="checkbox" checked={rt.bulletin_usd !== false} onChange={(e) => void save({ bulletin_usd: e.target.checked })} />Dólar nas boas-vindas</label>
+      <label className="check"><input type="checkbox" checked={!!rt.bulletin_btc} onChange={(e) => void save({ bulletin_btc: e.target.checked })} />Bitcoin nas boas-vindas</label>
+      <label>Seu time (manchetes nas boas-vindas e “e o meu time?”)
+        <input type="text" value={team} maxLength={40} placeholder="ex.: Goiás" onChange={(e) => setTeam(e.target.value)} onBlur={() => team !== (rt.team ?? '') && void save({ team: team.trim() })} />
+      </label>
+      <label className="check"><input type="checkbox" checked={ws.on} onChange={(e) => void save({ week_summary: { ...ws, on: e.target.checked } })} />Resumo da semana (agenda, aniversários, tempo e pendências)</label>
+      {ws.on && (
+        <div className="row">
+          <select value={ws.day} aria-label="Dia do resumo" onChange={(e) => void save({ week_summary: { ...ws, day: Number(e.target.value) } })} style={{ width: 'auto', flex: 1 }}>
+            {WEEK.map((d, i) => <option key={d} value={i}>{d}</option>)}
+          </select>
+          <input type="time" value={ws.at} aria-label="Hora do resumo" onChange={(e) => { if (/^\d{2}:\d{2}$/.test(e.target.value)) void save({ week_summary: { ...ws, at: e.target.value } }) }} />
+        </div>
+      )}
+      <p className="dim">Cotações da AwesomeAPI e manchetes do Google Notícias, com a fonte; sem resposta delas, o JARVIS diz que não conseguiu. O resumo vai também para o Telegram, se pareado. Por voz: “quanto está o dólar?”, “e o meu time?”, “resumo da semana”.</p>
+      {msg && <p className="warn">{msg}</p>}
+    </section>
+  )
+}
+
+/** Lista de compras e anotações (também pelo celular e pelo Telegram). */
+function ListsSection() {
+  const lists = useJarvis((s) => s.lists)
+  const [item, setItem] = useState('')
+  const [note, setNote] = useState('')
+  const say = (text: string) => { if (text.trim()) sendText(text) }
+  return (
+    <>
+      <section>
+        <h3>LISTA DE COMPRAS</h3>
+        <form className="row" onSubmit={(e) => { e.preventDefault(); say(`põe ${item} na lista`); setItem('') }}>
+          <input type="text" value={item} onChange={(e) => setItem(e.target.value)} maxLength={200} placeholder="ex.: leite, pão e café" aria-label="Itens para a lista" />
+          <button type="submit" disabled={!item.trim()}>Pôr</button>
+        </form>
+        <ul className="agenda-list">
+          {!lists?.shopping.length && <li className="dim">Lista vazia.</li>}
+          {lists?.shopping.map((it) => <li key={it}><span>{it}</span><button onClick={() => say(`tira ${it} da lista`)}>Comprado</button></li>)}
+        </ul>
+        <p className="dim">Por voz: “põe leite na lista”, “tira o pão da lista”, “o que tem na lista?”.</p>
+      </section>
+      <section>
+        <h3>ANOTAÇÕES</h3>
+        <form className="row" onSubmit={(e) => { e.preventDefault(); say(`anota: ${note}`); setNote('') }}>
+          <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={400} placeholder="Anotar…" aria-label="Nova anotação" />
+          <button type="submit" disabled={!note.trim()}>Anotar</button>
+        </form>
+        <ul className="agenda-list">
+          {!lists?.notes.length && <li className="dim">Nenhuma anotação.</li>}
+          {lists?.notes.slice(0, 10).map((n) => <li key={n.id}><span>{n.text} <small>{n.created.slice(8, 10)}/{n.created.slice(5, 7)} {n.created.slice(11, 16)}</small></span></li>)}
+        </ul>
+        <p className="dim">Por voz: “anota: ligar para o banco”, “minhas anotações”. Ficam só neste PC (backend/data/listas.sqlite3).</p>
+      </section>
+    </>
+  )
+}
+
+interface MobileInfo { enabled: boolean; running: boolean; port: number; urls: string[]; error: string; devices: { id: string; name: string; created: number; last_seen: number }[] }
+
+/** Celular na rede de casa: liga o servidor do celular, pareia por QR e lista os aparelhos. */
+function PhoneSection() {
+  const [info, setInfo] = useState<MobileInfo | null>(null)
+  const [pair, setPair] = useState<{ code: string; url: string; qr: string; expires_in: number } | null>(null)
+  const [msg, setMsg] = useState('')
+  const load = () => api<MobileInfo>('/api/mobile').then(setInfo).catch((e) => setMsg((e as Error).message))
+  useEffect(() => { void load(); const t = window.setInterval(load, 8000); return () => window.clearInterval(t) }, [])
+  const toggle = async (on: boolean) => { setPair(null); try { await saveSettings({ mobile_enabled: on }); await load() } catch (e) { setMsg((e as Error).message) } }
+  const newCode = async () => { try { setPair(await api('/api/mobile/pair', { method: 'POST', body: '{}' })) } catch (e) { setMsg((e as Error).message) } }
+  const remove = async (id: string, name: string) => { if (!window.confirm(`Remover “${name}”? Ele perde o acesso na hora.`)) return; try { setInfo(await api(`/api/mobile/devices/${id}`, { method: 'DELETE' })) } catch (e) { setMsg((e as Error).message) } }
+  if (!info) return <section><h3>CELULAR</h3><p className="dim">{msg || 'Lendo…'}</p></section>
+  return (
+    <section>
+      <h3>CELULAR</h3>
+      <label className="check"><input type="checkbox" checked={info.enabled} onChange={(e) => void toggle(e.target.checked)} />Usar o JARVIS pelo celular na rede de casa</label>
+      {info.error && <p className="warn">{info.error}</p>}
+      {info.running && (
+        <>
+          <p className="good">Ligado: {info.urls.join(' · ') || `porta ${info.port}`}</p>
+          <div className="row"><button onClick={() => void newCode()}>Parear celular</button></div>
+          {pair && (
+            <div className="pairbox">
+              <div className="qr" dangerouslySetInnerHTML={{ __html: pair.qr }} />
+              <div><b className="code">{pair.code}</b><p className="dim">Leia o QR com a câmera do celular (mesmo Wi-Fi) ou abra {pair.url.split('#')[0]} e digite o código. Vale 5 minutos.</p></div>
+            </div>
+          )}
+        </>
+      )}
+      <ul className="agenda-list">
+        {info.devices.map((d) => <li key={d.id}><span>{d.name} <small>visto {new Date(d.last_seen * 1000).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</small></span><button className="danger" onClick={() => void remove(d.id, d.name)}>Remover</button></li>)}
+      </ul>
+      <p className="dim">O celular vê cenas, luzes, porta (trancar e ver), agenda, lista, anotações e conversa por texto (use o microfone do teclado). Não mexe na tela nem no teclado do PC. Na 1ª vez o Windows pergunta se libera o Python na rede: permita só em “redes privadas”. Fora de casa: Tailscale (veja docs\TAILSCALE_E_TELEGRAM.md) — nunca abra portas no roteador.</p>
+      {msg && <p className="warn">{msg}</p>}
+    </section>
+  )
+}
+
+interface TelegramInfo { configured: boolean; running: boolean; paired: boolean; bot: string; error: string }
+
+function TelegramSection() {
+  const [info, setInfo] = useState<TelegramInfo | null>(null)
+  const [code, setCode] = useState('')
+  const [msg, setMsg] = useState('')
+  const load = () => api<TelegramInfo>('/api/telegram').then(setInfo).catch((e) => setMsg((e as Error).message))
+  useEffect(() => { void load(); const t = window.setInterval(load, 6000); return () => window.clearInterval(t) }, [])
+  const act = async (action: string) => {
+    setMsg('')
+    try {
+      const r = await api<Record<string, unknown>>(`/api/telegram/${action}`, { method: 'POST', body: '{}' })
+      if (action === 'pair') setCode(String(r.code))
+      if (action === 'test') setMsg('Mensagem de teste enviada.')
+      await load()
+    } catch (e) { setMsg((e as Error).message) }
+  }
+  return (
+    <section>
+      <h3>TELEGRAM</h3>
+      {!info ? <p className="dim">{msg || 'Lendo…'}</p> : !info.configured ? (
+        <p className="dim">Fale com o JARVIS de qualquer lugar e receba os avisos (agenda, fechadura, cenas, resumo da semana). 1) No Telegram, crie um bot com o <b>@BotFather</b>. 2) Cole o token em backend\.env, na linha TELEGRAM_BOT_TOKEN=. 3) Reinicie o JARVIS e volte aqui.</p>
+      ) : (
+        <>
+          <p className={info.paired ? 'good' : info.error ? 'warn' : 'dim'}>{info.error || (info.paired ? `Pareado com o seu chat${info.bot ? ` · @${info.bot}` : ''}.` : `Bot @${info.bot || '…'} pronto, ainda sem pareamento.`)}</p>
+          <div className="row">
+            {!info.paired && <button onClick={() => void act('pair')}>Gerar código</button>}
+            {info.paired && <button onClick={() => void act('test')}>Mandar teste</button>}
+            {info.paired && <button className="danger" onClick={() => { if (window.confirm('Desfazer o pareamento do Telegram?')) void act('unpair') }}>Desparear</button>}
+          </div>
+          {code && !info.paired && <p className="good">Mande para @{info.bot}: <b className="code">/parear {code}</b> (vale 10 minutos)</p>}
+          <p className="dim">Só o seu chat é atendido; daqui não dá para mexer na tela, digitar, ver a tela nem destrancar a porta. O PC só faz pedidos para fora: nenhuma porta é aberta.</p>
+        </>
+      )}
+      {msg && <p className="warn">{msg}</p>}
+    </section>
+  )
+}
+
+/** Modo jogo, descanso de tela e gestos com a câmera. */
+function ComputerSection() {
+  const rt = useJarvis((s) => s.core?.runtime)
+  const [msg, setMsg] = useState('')
+  if (!rt) return null
+  const save = (patch: Record<string, unknown>) => saveSettings(patch).then(() => setMsg('')).catch((e) => setMsg((e as Error).message))
+  return (
+    <section>
+      <h3>COMPUTADOR</h3>
+      <label className="check"><input type="checkbox" checked={rt.game_auto !== false} onChange={(e) => void save({ game_auto: e.target.checked })} />Modo jogo automático: com um jogo aberto, o HUD pausa e libera a placa de vídeo</label>
+      <label className="check"><input type="checkbox" checked={!!rt.game_led} onChange={(e) => void save({ game_led: e.target.checked ? '#8a2be2' : '' })} />Fita de LED na cor de jogo{rt.game_led ? <input type="color" value={rt.game_led} aria-label="Cor de jogo" onChange={(e) => void save({ game_led: e.target.value })} style={{ marginLeft: 8, width: 36, height: 22, padding: 0, border: 0, background: 'none' }} /> : null}</label>
+      <label>Descanso de tela depois de
+        <select value={rt.screensaver_min ?? 10} onChange={(e) => void save({ screensaver_min: Number(e.target.value) })}>
+          <option value={0}>nunca</option>
+          {[2, 5, 10, 20, 30, 60].map((m) => <option key={m} value={m}>{m} minutos parado</option>)}
+        </select>
+      </label>
+      <label className="check"><input type="checkbox" checked={!!rt.gestures} onChange={(e) => void save({ gestures: e.target.checked })} />Gestos com a câmera: ✋ tocar/pausar · 👍 👎 volume · ✌ próxima música</label>
+      {rt.gestures && <p className="warn">A câmera fica ligada enquanto os gestos estiverem ativos (o HUD mostra “CÂMERA: GESTOS”). Tudo roda neste PC; nada é gravado ou enviado. Pausa sozinho com o JARVIS bloqueado ou em modo jogo.</p>}
+      <p className="dim">Jogos reconhecidos: pastas da Steam, Epic, Riot, Xbox, EA, Ubisoft, GOG, Battle.net e Rockstar. Outros: permissions.json → "jogos": ["nome.exe"]. Por voz: “modo jogo”, “começa um pomodoro”, “lê pra mim” (lê o texto selecionado).</p>
+      {msg && <p className="warn">{msg}</p>}
     </section>
   )
 }

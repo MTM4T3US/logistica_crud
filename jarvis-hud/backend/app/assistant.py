@@ -67,7 +67,7 @@ def claims_action(text: str) -> bool:
     return bool(_ACTION_CLAIM.search(text or ""))
 from .voice.tts import STYLES, GeminiTTS, LocalTTS, PiperTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
 
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 
 SCENE_DAYS = {"todos": range(7), "dias_uteis": range(5), "fim_de_semana": (5, 6)}
 MAX_TOOL_ROUNDS = 6
@@ -446,7 +446,8 @@ class Assistant:
             "game": {"on": self.game["on"], "source": self.game["source"]},
             # botões rápidos que existem neste PC (luzes = casa e/ou fita; house = há lâmpadas Tuya)
             "quick": {"lights": self.quick_plan("luzes:on") is not None, "house": bool(self.home.lights()),
-                      "leds": self.quick_plan("fita:on") is not None, "door": self.quick_plan("porta:status") is not None},
+                      "leds": self.quick_plan("fita:on") is not None, "door": self.quick_plan("porta:status") is not None,
+                      "lockdown": self.quick_plan("porta:lockdown") is not None},
             "home": {"note": self.home_note, "lights": [{"id": d.id, "name": d.name} for d in self.home.lights()]},
             "intro": {"music": self.intro_music() is not None, "music_name": (self.memory.get_setting("intro_music", {}) or {}).get("name", "")},
         }
@@ -473,7 +474,18 @@ class Assistant:
             kind = "fita"
         if kind == "fita" and arg in ("on", "off") and "control_device" in tools and self.devices.get("leds") is not None:
             return ("Ligar a fita de LED" if arg == "on" else "Desligar a fita de LED"), Plan("leds", [_call("control_device", device_id="leds", action=arg)], first)
-        if kind == "porta" and arg in ("status", "lock", "lockdown") and "control_device" in tools and self.devices.get("fechadura") is not None:
+        # 0.7: gestos da câmera e botões do HUD/celular
+        if kind == "midia" and arg in ("play_pause", "next", "previous") and "media_control" in tools:
+            label = {"play_pause": "Tocar/pausar", "next": "Próxima faixa", "previous": "Faixa anterior"}[arg]
+            return label, Plan("media", [_call("media_control", action=arg)], first)
+        if kind == "volume" and arg in ("up", "down") and "change_volume" in tools:
+            return ("Aumentar o volume" if arg == "up" else "Diminuir o volume"), Plan("volume", [_call("change_volume", delta=10 if arg == "up" else -10)], first)
+        if kind == "pomodoro" and arg in ("start", "stop") and f"pomodoro_{arg}" in tools:
+            return ("Começar Pomodoro" if arg == "start" else "Parar Pomodoro"), Plan("pomodoro", [_call(f"pomodoro_{arg}")], first)
+        if kind == "jogo" and arg in ("on", "off") and "game_mode" in tools:
+            return ("Modo jogo" if arg == "on" else "Sair do modo jogo"), Plan("jogo", [_call("game_mode", on=arg == "on")], first)
+        lock = self.devices.get("fechadura")
+        if kind == "porta" and arg in ("status", "lock", "lockdown") and "control_device" in tools and lock is not None and arg in lock.actions:
             label = {"status": "Ver a porta", "lock": "Trancar a porta", "lockdown": "Modo trancado"}[arg]
             return label, Plan("lock", [_call("control_device", device_id="fechadura", action=arg)], first)
         return None

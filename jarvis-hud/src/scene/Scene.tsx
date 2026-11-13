@@ -52,10 +52,13 @@ function CityLayer({ blocks }: { blocks: number }) {
 export function Scene() {
   const quality = useStore((s) => s.quality)
   const p = PROFILES[quality]
+  // 0.7: modo jogo — o HUD para de desenhar e libera a placa de vídeo
+  const paused = useJarvis((s) => s.game)
   return (
     <Canvas
       key={quality}
       className="scene"
+      frameloop={paused ? 'never' : 'always'}
       linear
       flat
       dpr={p.dpr}

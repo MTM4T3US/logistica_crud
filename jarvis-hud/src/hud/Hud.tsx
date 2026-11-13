@@ -9,9 +9,11 @@ import { useFace } from '../core/face'
 import { rig } from '../state/rig'
 import { Settings } from './Settings'
 import { Dock, Drawer, Help, Toast, TopActions } from './Panels'
+import { GameBanner, PomodoroChip, Saver, useGestureCamera, useSaver } from './Extras'
+import { useGestures } from '../core/gestures'
 
 /** "0.6.0" → "0.6", "0.6.1" → "0.6.1" (o núcleo informa a versão; sem núcleo, a do HUD). */
-export const useVersion = () => (useJarvis((s) => s.core?.version) ?? '0.6.1').replace(/\.0$/, '')
+export const useVersion = () => (useJarvis((s) => s.core?.version) ?? '0.7').replace(/\.0$/, '')
 
 /** Re-renderiza o HUD ~20×/s (relógio, legendas, porcentagens). */
 function useTick(hz = 20) {
@@ -462,6 +464,7 @@ function CommandBar() {
   const recording = j.mic === 'recording'
   const active = j.busy || liveAudio.speaking || mode === 'speaking'
   const cloudMic = !!j.core?.voice.stt_cloud && (recording || j.wake)
+  const gest = useGestures()
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
     const t = text.trim()
@@ -524,8 +527,11 @@ function CommandBar() {
           <GearIcon />
         </button>
       </form>
-      {(recording || j.wake || cloudMic || j.computer) && (
+      {(recording || j.wake || cloudMic || j.computer || gest.status !== 'off') && (
         <div className="flags">
+          {gest.status === 'on' && <span className="rec soft">● CÂMERA: GESTOS · ✋ TOCAR/PAUSAR · 👍👎 VOLUME · ✌ PRÓXIMA{gest.last ? ` · ÚLTIMO: ${gest.last.toUpperCase()}` : ''}</span>}
+          {gest.status === 'loading' && <span className="rec soft">CÂMERA: CARREGANDO GESTOS…</span>}
+          {gest.status === 'error' && <span className="rec">GESTOS: {gest.message.toUpperCase()}</span>}
           {j.computer && <span className="cloud">● JARVIS CONTROLANDO O COMPUTADOR · TELA ENVIADA AO GEMINI · MEXA O MOUSE PARA PARAR{j.computer.step ? ` · PASSO ${j.computer.step}: ${j.computer.desc.toUpperCase()}` : ''}</span>}
           {recording && <span className="rec">● MICROFONE CAPTURANDO</span>}
           {j.wake && !recording && <span className="rec soft">● ESCUTA CONTÍNUA · {audio.inWindow ? 'PODE CONTINUAR FALANDO' : `DIGA “${(j.core?.voice.wake_word ?? 'jarvis').toUpperCase()}”`} · DETECÇÃO LOCAL</span>}
@@ -597,13 +603,17 @@ export function Hud() {
   const online = conn === 'online'
   const real = online && !demo
   const stage = !inMap && mode !== 'face'
+  const saver = useSaver() && !demo
+  useGestureCamera()
   return (
-    <div className={`hud mode-${mode} ${real ? 'live' : ''}`}>
+    <div className={`hud mode-${mode} ${real ? 'live' : ''} ${saver ? 'saver' : ''}`}>
       <header className="topbar">
         <Badge />
-        <div className="tb-right"><Tabs /><TopActions /></div>
+        <div className="tb-right"><PomodoroChip /><Tabs /><TopActions /></div>
       </header>
       <Toast />
+      <GameBanner />
+      {saver && <Saver />}
       <div className={`corner ${inMap ? 'away' : ''}`}>
         <Clock />
         <Status mode={mode} modeT={modeT} />

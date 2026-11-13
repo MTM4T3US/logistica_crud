@@ -199,7 +199,7 @@ async def test_scene_skips_missing_devices_and_speaks_the_briefing(settings, tmp
     text = plan.render([out], "senhor")
     assert text.startswith("Bom dia, senhor. Não consegui o clima")
     leaving = await core.tools.execute(ToolCall("2", "run_routine", {"routine_id": "saindo"}), yes, quiet)
-    assert asked == ["Executar a rotina “Saindo de casa” (2 etapas)?"] and leaving.executed       # pede confirmação (conta só o que existe aqui)
+    assert asked == ["Executar a rotina “Saindo de casa” (1 etapa)?"] and leaving.executed       # pede confirmação (conta só o que existe aqui)
 
 
 async def test_scheduled_scenes_run_once_in_their_window_and_never_confirm_alone(settings, tmp_path):
@@ -274,7 +274,7 @@ def test_hud_buttons_run_fixed_plans_without_ai_and_never_unlock(client):
 
     with client.websocket_connect("/ws?token=token-de-teste", headers={**HOST, "origin": ORIGIN}) as ws:
         st = ws.receive_json()["state"]
-        assert st["quick"] == {"lights": True, "house": False, "leds": True, "door": True}   # sem Tuya: "luzes" vira a fita
+        assert st["quick"] == {"lights": True, "house": False, "leds": True, "door": True, "lockdown": False}   # sem Tuya: "luzes" vira a fita
         scene = st["scenes"][0]
         ws.send_json({"type": "quick", "action": f"cena:{scene['id']}"})
         shown = until_kind(ws, "transcript")

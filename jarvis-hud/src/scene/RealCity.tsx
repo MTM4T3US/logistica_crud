@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import { rig } from '../state/rig'
+import { useJarvis } from '../state/jarvis'
 import { useStore } from '../state/store'
 import { frag, vert } from './City'
 import { buildCity, S, waterAreas, type Inst } from './cityGen'
@@ -147,13 +148,33 @@ export function RealCity({ data }: { data: CityData }) {
     return {
       ground: new THREE.ShaderMaterial({ uniforms: fogU(), vertexShader: waterVert, fragmentShader: groundFrag, toneMapped: false }),
       solid: mk(1, '#ffffff', true),
-      houses: mk(0),
+      houses: (() => {
+        // 0.7: janelas acesas à noite (pelo horário real); cada casa acende umas e não outras
+        const m = mk(0)
+        m.uniforms.uNight = { value: 0 }
+        m.fragmentShader = frag.replace('uniform vec3 uTintC;', 'uniform vec3 uTintC; uniform float uNight;')
+          .replace('gl_FragColor = vec4(col * .98, 1.);', `
+            float wx = fract((vL.x + vL.z) * 3.2 + .5), wy = fract(vL.y * 2.4 + .5);
+            float win = step(.28, wx) * step(wx, .72) * step(.3, wy) * step(wy, .72) * (1. - top);
+            float on = step(.42, h21(floor(vW.xz * .9) + floor(vL.y * 2.4)));
+            col = col * (1. - .55 * uNight) + vec3(1.35, .95, .5) * win * on * uNight * .9;
+            gl_FragColor = vec4(col * .98, 1.);`)
+        return m
+      })(),
       trees: mk(1),
       water: new THREE.ShaderMaterial({ uniforms: { ...fogU(), uT: { value: 0 } }, vertexShader: waterVert, fragmentShader: waterFrag, toneMapped: false }),
       glow: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
       edges: new THREE.LineBasicMaterial({ color: new THREE.Color(0.35, 1.15, 1.7), transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
       sweep: new THREE.ShaderMaterial({ uniforms: { uT: { value: 0 }, uA: { value: 0 } }, vertexShader: waterVert, fragmentShader: sweepFrag, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }),
       lamps: pts(1.5, 0.45),
+      rain: new THREE.ShaderMaterial({
+        uniforms: { uT: { value: 0 }, uA: { value: 0 } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+        vertexShader: /* glsl */ `attribute float aSeed; attribute float aHead; uniform float uT; varying float vA;
+          void main(){ vec3 p = position; float fall = mod(p.y - uT * (55. + 25. * aSeed), 70.); p.y = fall + aHead * 3.2; p.x -= fall * .08 - aHead * .22;
+            vA = smoothstep(0., 6., fall) * (1. - smoothstep(60., 70., fall));
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.); }`,
+        fragmentShader: /* glsl */ `precision highp float; uniform float uA; varying float vA; void main(){ gl_FragColor = vec4(vec3(.55, .8, 1.2) * vA * uA, 1.); }`,
+      }),
       cars: pts(2.3, 1),
     }
   }, [])
@@ -189,14 +210,47 @@ export function RealCity({ data }: { data: CityData }) {
     return { list, g }
   }, [city, quality])
 
+  // chuva: riscos caindo sobre a área do anel (animados no shader, sem custo de CPU)
+  const rainGeo = useMemo(() => {
+    const n = { high: 2400, medium: 1600, low: 700 }[quality]
+    const pos = new Float32Array(n * 6), seed = new Float32Array(n * 2), head = new Float32Array(n * 2)
+    let s = 11
+    const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647)
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd()) * 150, y = rnd() * 70, k = rnd()
+      const x = Math.cos(a) * r, z = Math.sin(a) * r
+      pos.set([x, y, z, x, y, z], i * 6)        // o mesmo ponto; o shader estica a cabeça do risco
+      seed[i * 2] = k; seed[i * 2 + 1] = k; head[i * 2 + 1] = 1
+    }
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+    g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1))
+    g.setAttribute('aHead', new THREE.BufferAttribute(head, 1))
+    return g
+  }, [quality])
   const pins = useMemo(() => data.pois.slice(0, 14).map(([name, kind, x, z], i) => ({ name, kind, x: x * S, z: z * S, h: 12 + (i % 3) * 3, ...labelTexture(name, kind) })), [data])
   useEffect(() => () => { pins.forEach((p) => p.tex.dispose()) }, [pins])
 
   useFrame(({ size, camera }, dt) => {
     group.current.visible = rig.mapT > 0.5
     if (!group.current.visible) return
-    const fog = THREE.MathUtils.lerp(0.0048, 0.0022, rig.descend * rig.descend)
-    for (const m of [mats.ground, mats.solid, mats.houses, mats.trees, mats.water]) m.uniforms.uFog.value = fog
+    // 0.7: noite e chuva de verdade (Open-Meteo); sem leitura do clima, pelo relógio de Itumbiara
+    const w = useJarvis.getState().weather
+    const tz = useJarvis.getState().core?.location.timezone ?? 'America/Sao_Paulo'
+    const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', hour12: false }).format(new Date()))
+    const night = w?.ok && w.is_day !== undefined ? !w.is_day : hour >= 19 || hour < 6
+    const raining = !!w?.ok && ((w.code ?? 0) >= 51 && (w.code ?? 0) <= 99 && !((w.code ?? 0) >= 71 && (w.code ?? 0) <= 77) || (w.precipitation_mm ?? 0) > 0.2)
+    const step0 = Math.min(dt, 0.1)
+    rig.nightT += ((night ? 1 : 0) - rig.nightT) * Math.min(1, step0 * 1.5)
+    rig.rainT += ((raining ? 1 : 0) - rig.rainT) * Math.min(1, step0 * 1.5)
+    const fog = THREE.MathUtils.lerp(0.0048, 0.0022, rig.descend * rig.descend) * (1 + 0.6 * rig.rainT)
+    for (const m of [mats.ground, mats.solid, mats.houses, mats.trees, mats.water]) {
+      m.uniforms.uFog.value = fog
+      ;(m.uniforms.uFogColor.value as THREE.Color).setRGB(0.2 - 0.15 * rig.nightT - 0.04 * rig.rainT, 0.36 - 0.27 * rig.nightT - 0.06 * rig.rainT, 0.82 - 0.6 * rig.nightT - 0.12 * rig.rainT)
+    }
+    mats.houses.uniforms.uNight.value = rig.nightT
+    mats.rain.uniforms.uT.value = rig.t
+    mats.rain.uniforms.uA.value = rig.rainT * 0.95
     mats.water.uniforms.uT.value = rig.t
     mats.sweep.uniforms.uT.value = rig.t
     const show = Math.max(0, rig.descend * 2 - 1)
@@ -204,7 +258,8 @@ export function RealCity({ data }: { data: CityData }) {
     const scale = size.height / (2 * Math.tan(THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov) / 2))
     mats.lamps.uniforms.uScale.value = scale
     mats.cars.uniforms.uScale.value = scale
-    mats.lamps.uniforms.uA.value = 0.2 + 0.3 * show
+    mats.lamps.uniforms.uA.value = (0.2 + 0.3 * show) * (1 + 1.6 * rig.nightT)
+    mats.cars.uniforms.uA.value = 1 + 0.6 * rig.nightT
     ring.current.scale.setScalar(1 + 0.012 * Math.sin(rig.t * 1.4))
     ;(ring.current.material as THREE.MeshBasicMaterial).opacity = (0.75 + 0.2 * Math.sin(((rig.t * 0.25) % 1) * Math.PI * 2)) * show
     // carros
@@ -252,6 +307,7 @@ export function RealCity({ data }: { data: CityData }) {
       )}
       <points geometry={lampGeo} material={mats.lamps} frustumCulled={false} />
       <points ref={cars} geometry={traffic.g} material={mats.cars} frustumCulled={false} />
+      <lineSegments geometry={rainGeo} material={mats.rain} frustumCulled={false} visible={true} />
       {pins.map((p) => (
         <group key={p.name + p.x} position={[p.x, 0, p.z]}>
           <mesh position-y={p.h / 2}>

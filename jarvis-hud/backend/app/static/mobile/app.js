@@ -97,7 +97,8 @@ function render(s) {
   for (const x of s.scenes) {
     const b = document.createElement('button'); b.className = 'scene'
     const i = document.createElement('b'); i.textContent = ICON[x.icon] || '✦'
-    const n = document.createElement('span'); n.textContent = x.name.replace(/^modo /i, '').replace(/ de casa$/i, '')
+    const short = x.name.replace(/^modo /i, '').replace(/ de casa$/i, '')
+    const n = document.createElement('span'); n.textContent = short.charAt(0).toUpperCase() + short.slice(1)
     b.append(i, n)
     if (x.confirm || x.schedule?.on) { const m = document.createElement('small'); m.textContent = x.schedule?.on ? x.schedule.at : 'CONFIRMA'; b.append(m) }
     b.onclick = () => quick('cena:' + x.id, x.name, x.confirm)
@@ -107,7 +108,8 @@ function render(s) {
   const h = $('house'); h.textContent = ''
   const add = (label, action, cls, confirm) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; b.onclick = () => quick(action, label, confirm); h.append(b) }
   if (q.lights) { add('Acender', 'luzes:on'); add('Apagar', 'luzes:off') }
-  if (q.door) { add('Porta?', 'porta:status'); add('Trancar', 'porta:lock'); add('Modo trancado', 'porta:lockdown', 'warn', true) }
+  if (q.door) { add('Porta?', 'porta:status'); add('Trancar', 'porta:lock') }
+  if (q.lockdown) add('Modo trancado', 'porta:lockdown', 'warn', true)
   if (!h.children.length) h.innerHTML = '<span class="muted">Nada para controlar neste PC.</span>'
   const door = s.door?.state || null
   $('doorLine').textContent = door ? (door.locked === true ? 'TRANCADA' : door.locked === false ? 'DESTRANCADA' : '') + (s.door.simulated ? ' · SIMULADOR' : '') : ''

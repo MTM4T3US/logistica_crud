@@ -191,6 +191,7 @@ try {
     sections.push(...await page.evaluate(() => [...document.querySelectorAll('.settings h3')].map((e) => e.firstChild.textContent.trim())))
   }
   check('Configurações (em abas): IA, voz, microfone, privacidade, cenas, desempenho', ['IA', 'VOZ', 'MICROFONE', 'PRIVACIDADE', 'CENAS', 'DESEMPENHO'].every((x) => sections.includes(x)), sections.join(', '))
+  check('0.7: seções de boletim, lista, anotações, celular, Telegram e computador', ['BOLETIM E RESUMO', 'LISTA DE COMPRAS', 'ANOTAÇÕES', 'CELULAR', 'TELEGRAM', 'COMPUTADOR'].every((x) => sections.includes(x)), sections.filter((x) => /BOLETIM|LISTA|ANOTA|CELULAR|TELEGRAM|COMPUTADOR/.test(x)).join(', '))
   await page.click('.settings header button')
   // 0.6: botão de cena → plano fixo no núcleo, com a mesma confirmação de um comando falado
   const scenes = await page.$$eval('.dock .scn', (bs) => bs.map((b) => b.textContent))
@@ -202,6 +203,19 @@ try {
   await page.keyboard.press('?')
   check('Ajuda abre pelo teclado (?)', await page.isVisible('.modal .help-grid'))
   await page.keyboard.press('Escape')
+  // 0.7: lista de compras e Pomodoro por voz (texto), sem Gemini
+  const ask = async (t, re) => {
+    await page.fill('.cmd-row input', t); await page.keyboard.press('Enter')
+    await page.waitForFunction((r) => [...document.querySelectorAll('.cmd .log p')].some((p) => new RegExp(r).test(p.textContent) && /^JARVIS/.test(p.textContent)), re, { timeout: 20000 }).catch(() => {})
+    return (await read()).log.at(-1)
+  }
+  const shop = await ask('põe café e açúcar na lista', 'na lista|já estava')
+  check('Lista de compras por voz', /na lista|já estava/.test(shop || ''), shop)
+  await ask('começa um pomodoro', 'Pomodoro')
+  const chip = await page.waitForSelector('.pomo', { timeout: 8000 }).then((e) => e.textContent()).catch(() => '')
+  await ask('para o pomodoro', 'encerrado')
+  const gone = await page.waitForSelector('.pomo', { state: 'detached', timeout: 8000 }).then(() => true).catch(() => false)
+  check('Pomodoro aparece no topo e some ao parar', /FOCO/.test(chip) && gone, chip)
   // 0.6.1: cidade real com as quadras preenchidas (só se o núcleo já tem o mapa do OpenStreetMap)
   if (await page.evaluate(() => !!window.__jarvis?.jarvis?.getState().cityMap)) {
     await page.fill('.cmd-row input', 'mostra o mapa'); await page.keyboard.press('Enter')

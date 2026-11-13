@@ -78,7 +78,7 @@ class ListTools:
             parts.append(f"{say_items(added)} na lista")
         if already:
             parts.append(f"{say_items(already)} já {'estava' if len(already) == 1 else 'estavam'}")
-        return ToolOutcome(run.call, True, bool(added), "Pronto: " + "; ".join(parts) + ".", data={"items": self.l.items()})
+        return ToolOutcome(run.call, True, True, "Pronto: " + "; ".join(parts) + ".", data={"items": self.l.items()})
 
     async def _shop_remove(self, args: dict[str, Any], run: Any) -> ToolOutcome:
         removed, missing = self.l.remove_items(split_items(args["items"]))

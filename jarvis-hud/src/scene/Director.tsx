@@ -67,6 +67,8 @@ export function Director() {
       rig.mic = m === 'listening' ? liveAudio.micLevel : d(rig.mic, 0, 8)
     }
     rig.errorT = d(rig.errorT, liveAudio.errorUntil > performance.now() / 1000 ? 1 : 0, 7)
+    rig.okT = d(rig.okT, rig.okUntil > performance.now() / 1000 ? 1 : 0, 6)
+    rig.warnT = d(rig.warnT, rig.warnUntil > performance.now() / 1000 ? 1 : 0, 5)
 
     const speed = s.ritmo === 'RÁPIDO' ? 1.8 : 1
     rig.spin = d(rig.spin, speed * (m === 'thinking' ? 3.4 : m === 'speaking' ? 1.7 : m === 'listening' ? 1.35 : 1), 3)

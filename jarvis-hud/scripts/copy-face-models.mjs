@@ -9,7 +9,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const src = resolve(root, 'node_modules/@vladmandic/human/models')
 const out = resolve(root, 'public/models/face')
 // detector, malha (468 pontos), íris, descritor de identidade, anti-foto e prova de vida
-const MODELS = ['blazeface', 'facemesh', 'iris', 'faceres', 'antispoof', 'liveness']
+// 0.7: detector e esqueleto de mãos (gestos com a câmera, opcionais)
+const MODELS = ['blazeface', 'facemesh', 'iris', 'faceres', 'antispoof', 'liveness', 'handtrack', 'handlandmark-lite']
 
 if (!existsSync(src)) {
   console.error('[modelos de rosto] @vladmandic/human não instalado — rode npm install.')

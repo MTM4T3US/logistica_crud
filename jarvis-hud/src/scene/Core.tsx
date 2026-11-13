@@ -11,6 +11,7 @@ const GLASS = new THREE.Color(0.025, 0.15, 0.66)
 const DEEP = new THREE.Color(0.03, 0.14, 0.55)
 const GREEN = new THREE.Color(0.25, 1.35, 0.8)
 const ERR = new THREE.Color(1.7, 0.45, 0.18)
+const AMBER = new THREE.Color(1.6, 1.05, 0.3)
 
 interface RingProps {
   rIn: number
@@ -63,7 +64,7 @@ function Ring({ rIn, rOut, z = 0, color = CYAN, opacity = 1, count = 0, duty = 0
   )
   useFrame((_, dt) => {
     mesh.current.rotation.z += speed * rig.spin * Math.min(dt, 0.1)
-    mat.current.uniforms.uTint.value = rig.confirmT * 0.4
+    mat.current.uniforms.uTint.value = Math.max(rig.confirmT * 0.4, rig.okT * 0.32)
     mat.current.uniforms.uBoost.value = rig.glow * (1 + react * (rig.level + 0.9 * rig.mic * rig.listenT))
   })
   return (
@@ -90,7 +91,7 @@ const D = Math.PI / 180
 function Heart() {
   const mat = useRef<THREE.ShaderMaterial>(null!)
   const uniforms = useMemo(
-    () => ({ uTime: { value: 0 }, uLevel: { value: 0 }, uSpeak: { value: 0 }, uThink: { value: 0 }, uListen: { value: 0 }, uMic: { value: 0 }, uErr: { value: 0 }, uTint: { value: 0 }, uGlow: { value: 1 } }),
+    () => ({ uTime: { value: 0 }, uLevel: { value: 0 }, uSpeak: { value: 0 }, uThink: { value: 0 }, uListen: { value: 0 }, uMic: { value: 0 }, uErr: { value: 0 }, uTint: { value: 0 }, uGlow: { value: 1 }, uWarn: { value: 0 } }),
     [],
   )
   useFrame(() => {
@@ -102,7 +103,8 @@ function Heart() {
     u.uListen.value = rig.listenT
     u.uMic.value = rig.mic
     u.uErr.value = rig.errorT
-    u.uTint.value = rig.confirmT * 0.4
+    u.uTint.value = Math.max(rig.confirmT * 0.4, rig.okT * 0.5)
+    u.uWarn.value = rig.warnT
     u.uGlow.value = rig.glow
   })
   return (
@@ -118,7 +120,7 @@ function Heart() {
         fragmentShader={
           /* glsl */ `
           precision highp float;
-          uniform float uTime; uniform float uLevel; uniform float uSpeak; uniform float uThink; uniform float uListen; uniform float uMic; uniform float uErr; uniform float uTint; uniform float uGlow;
+          uniform float uTime; uniform float uLevel; uniform float uSpeak; uniform float uThink; uniform float uListen; uniform float uMic; uniform float uErr; uniform float uTint; uniform float uGlow; uniform float uWarn;
           varying vec2 vUv;
           ${NOISE}
           void main(){
@@ -157,6 +159,8 @@ function Heart() {
             // erro: o vidro pulsa em âmbar-avermelhado sem interromper a animação
             float lum = dot(col, vec3(.3, .5, .2));
             col = mix(col, vec3(1.5, .42, .2) * (lum + .12), uErr * (.55 + .25 * sin(uTime * 9.)));
+            // 0.7: aviso ou confirmação pendente — âmbar pulsando devagar
+            col = mix(col, vec3(1.45, 1.0, .35) * (lum + .1), uWarn * (.32 + .14 * sin(uTime * 3.)));
             float a = 1. - smoothstep(.985, 1., r);
             gl_FragColor = vec4(col * uGlow, a * .96);
           }`
@@ -179,9 +183,9 @@ function Markers() {
       const chase = Math.pow(Math.max(0, Math.sin(rig.t * 5 - (i / 12) * Math.PI * 2)), 6)
       const pulse = 0.7 + 1.1 * rig.mic
       const k = THREE.MathUtils.lerp(1, pulse, rig.listenT) * THREE.MathUtils.lerp(1, 0.25 + 1.4 * chase, rig.thinkT)
-      tmp.copy(pink).lerp(CYAN, Math.max(rig.thinkT * 0.6, rig.confirmT)).lerp(ERR, rig.errorT)
+      tmp.copy(pink).lerp(CYAN, Math.max(rig.thinkT * 0.6, rig.confirmT)).lerp(AMBER, rig.warnT * 0.8).lerp(ERR, rig.errorT)
       m.color.copy(tmp).multiplyScalar(k * rig.glow)
-      m.opacity = Math.max(rig.markerT, rig.thinkT, rig.errorT)
+      m.opacity = Math.max(rig.markerT, rig.thinkT, rig.errorT, rig.warnT)
     })
   })
   return (

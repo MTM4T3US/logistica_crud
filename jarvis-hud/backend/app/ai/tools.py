@@ -302,13 +302,25 @@ class ToolRegistry:
     async def _routine(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
         routine = self.perms.routines[args["routine_id"]]
         available = self.specs()
-        todo = [st for st in routine.steps if st["tool"] in available]
-        if routine.confirm and not await run.confirm(f"Executar a rotina “{routine.name}” ({len(todo)} etapas)?"):
+        def can(st: dict[str, Any]) -> bool:
+            if st["tool"] == "control_device":
+                dev = self.devices.get(str(st.get("args", {}).get("device_id", "")))
+                return dev is not None and st.get("args", {}).get("action") in dev.actions and st["tool"] in available
+            return st["tool"] in available
+
+        todo = [st for st in routine.steps if can(st)]
+        if routine.confirm and not await run.confirm(f"Executar a rotina “{routine.name}” ({len(todo)} etapa{'s' if len(todo) != 1 else ''})?"):
             return ToolOutcome(run.call, False, False, f"O usuário não autorizou “{routine.name}”.")
         steps = []
         speech: list[str] = []
         for i, step in enumerate(routine.steps):
             sub = ToolCall(id=f"{run.call.id}.{i + 1}", name=step["tool"], args=dict(step.get("args", {})))
+            dev = self.devices.get(str(sub.args.get("device_id", ""))) if sub.name == "control_device" else None
+            if sub.name == "control_device" and (dev is None or sub.args.get("action") not in dev.actions):
+                # 0.7: ex.: "modo trancado" na fechadura simulada (só a fechadura real tem) — pula, não é falha
+                steps.append({"tool": sub.name, "args": sub.args, "ok": True, "executed": False, "skipped": True,
+                              "message": f"pulado: {sub.args.get('device_id')} sem a ação “{sub.args.get('action')}” neste computador"})
+                continue
             if sub.name not in available:
                 # 0.6: cena pronta num PC sem esse recurso (ex.: sem luzes Tuya) — pula, não é falha
                 steps.append({"tool": sub.name, "args": sub.args, "ok": True, "executed": False, "skipped": True,

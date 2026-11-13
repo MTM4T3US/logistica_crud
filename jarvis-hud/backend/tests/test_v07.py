@@ -509,3 +509,16 @@ async def test_telegram_blocks_screen_actions_and_stops_on_a_bad_token(settings,
     bad = TelegramBot("RUIM", core, None, client=httpx.AsyncClient(transport=httpx.MockTransport(tg.handler)), poll_timeout=0)
     await bad.loop()                                         # 401: para sozinho, com o motivo
     assert "recusou o token" in bad.error and "RUIM" not in bad.error
+
+
+async def test_new_quick_buttons_for_gestures_pomodoro_and_game(settings, tmp_path):
+    core = make_core(settings, tmp_path)
+    tools = set(core.tools.specs())
+    for action, tool in (("midia:play_pause", "media_control"), ("volume:up", "change_volume"), ("pomodoro:start", "pomodoro_start"), ("jogo:off", "game_mode")):
+        found = core.quick_plan(action)
+        if tool in tools:
+            assert found is not None and found[1].calls[0].name == tool, action
+    assert core.quick_plan("volume:max") is None and core.quick_plan("midia:apagar") is None
+    out = await core.run_remote("Começar Pomodoro", "celular", plan=core.quick_plan("pomodoro:start")[1])
+    assert out["tools"][0]["executed"] and core.pomodoro.running
+    await core.pomodoro.stop()

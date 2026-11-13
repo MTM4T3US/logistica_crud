@@ -9,6 +9,8 @@ import type { CityData } from '../scene/RealCity'
 export interface WeatherData {
   ok: boolean; error?: string; stale?: boolean; source?: string; city?: string; state?: string
   temperature_c?: number; feels_like_c?: number; humidity?: number; wind_kmh?: number; condition?: string; fetched_at_text?: string
+  /** 0.7: código WMO, dia/noite e chuva agora (Open-Meteo) — para o tempo de verdade no mapa */
+  code?: number; is_day?: boolean; precipitation_mm?: number
   today?: { max_c: number; min_c: number; rain_probability: number; condition: string } | null
 }
 export interface SystemData { cpu_percent: number; ram_percent: number; disk_percent: number; disk_free_gb: number; ram_used_gb: number; ram_total_gb: number; platform: string }
@@ -30,6 +32,9 @@ export interface CoreState {
     intro_enabled?: boolean; intro_music_volume?: number; intro_voice_delay_s?: number
     /** 0.6.1: piscar para entrar (padrão: não) e câmera automática na tela de bloqueio */
     face_blink?: boolean; face_auto?: boolean
+    /** 0.7 */
+    bulletin_usd?: boolean; bulletin_btc?: boolean; team?: string; week_summary?: { on: boolean; day: number; at: string }
+    game_auto?: boolean; game_led?: string; screensaver_min?: number; mobile_enabled?: boolean; gestures?: boolean
     tts_engine: string; tts_voice_gemini: string; tts_voice_local: string; tts_voice_piper: string; tts_style: string; stt_engine: string; speak: boolean
     memory_enabled: boolean; cloud_audio_consent: boolean; user_title: string; chat_model: string; tts_model: string; tts_speed: number
     router_mode: string; continuous_consent: boolean; barge_in: boolean
@@ -50,8 +55,14 @@ export interface CoreState {
   /** 0.6: cenas da casa (prontas + as do permissions.json) e o horário de cada uma */
   scenes?: SceneData[]
   /** 0.6: botões rápidos que existem neste PC */
-  quick?: { lights: boolean; house: boolean; leds: boolean; door: boolean }
+  quick?: { lights: boolean; house: boolean; leds: boolean; door: boolean; lockdown?: boolean }
+  /** 0.7 */
+  lists?: ListsData | null
+  pomodoro?: PomodoroData | null
+  game?: { on: boolean; source: string }
 }
+export interface ListsData { shopping: string[]; notes: { id: number; text: string; created: string }[] }
+export interface PomodoroData { phase: string; left_s: number; cycle: number; cycles: number; focus_min: number; break_min: number; done_today: number }
 export interface SceneSchedule { at: string; days: 'todos' | 'dias_uteis' | 'fim_de_semana'; on: boolean }
 export interface SceneData { id: string; name: string; icon: string; words: string[]; exact: boolean; confirm: boolean; steps: string[]; schedule: SceneSchedule | null }
 /** Histórico do que aconteceu (avisos, lembretes, falhas e ações), para a gaveta "Histórico". */
@@ -103,13 +114,17 @@ interface JarvisState {
   toast: { text: string; ts: number } | null
   drawer: boolean
   help: boolean
+  /** 0.7 */
+  lists: ListsData | null
+  pomodoro: (PomodoroData & { at: number }) | null
+  game: boolean
   set: (patch: Partial<JarvisState>) => void
 }
 
 export const useJarvis = create<JarvisState>((set) => ({
   conn: 'connecting', core: null, busy: false, activity: '', lines: [], tools: [], weather: null, system: null, devices: [], news: null,
   error: null, notice: null, confirm: null, mic: 'off', wake: false, consentAsk: false, continuousAsk: false, settingsOpen: false,
-  locked: false, briefing: null, cityMap: null, computer: null, agenda: null, feed: [], toast: null, drawer: false, help: false,
+  locked: false, briefing: null, cityMap: null, computer: null, agenda: null, feed: [], toast: null, drawer: false, help: false, lists: null, pomodoro: null, game: false,
   set: (patch) => set(patch),
 }))
 
@@ -238,7 +253,8 @@ export function handleEvent(ev: Record<string, any>) {
       const face: FaceGateState | undefined = ev.state.face
       const locked = !!face?.active && !face.unlocked
       const was = J().locked
-      useJarvis.setState({ core: ev.state, devices: ev.state.devices, conn: 'online', locked, agenda: ev.state.agenda ?? null })
+      useJarvis.setState({ core: ev.state, devices: ev.state.devices, conn: 'online', locked, agenda: ev.state.agenda ?? null, lists: ev.state.lists ?? null,
+        pomodoro: ev.state.pomodoro ? { ...ev.state.pomodoro, at: now } : null, game: !!ev.state.game?.on })
       audio.bargeIn = ev.state.runtime?.barge_in ?? true
       // já liberado: carrega (ou baixa, 1ª vez) o mapa real em segundo plano, sem avisos se falhar
       if (!locked) void loadCityMap(true)
@@ -290,7 +306,12 @@ export function handleEvent(ev: Record<string, any>) {
       const entry: ToolEntry = { id: ev.id, name: ev.name, label: ev.label, stage: ev.stage, ok: ev.ok, executed: ev.executed, simulated: ev.simulated, summary: ev.summary, ts: now, args: ev.args ?? prev?.args }
       const rest = J().tools.filter((t) => t.id !== ev.id)
       useJarvis.setState({ tools: [...rest, entry].slice(-6) })
-      if (ev.stage === 'end') log('acao', `${ev.label}${ev.simulated ? ' (simulador)' : ''}: ${ev.summary ?? ''}`, !!ev.executed)
+      if (ev.stage === 'end') {
+        log('acao', `${ev.label}${ev.simulated ? ' (simulador)' : ''}: ${ev.summary ?? ''}`, !!ev.executed)
+        // humor do núcleo: feito = pulso verde; recusado/falhou = âmbar-avermelhado
+        if (ev.executed) rig.okUntil = performance.now() / 1000 + 1.6
+        else liveAudio.errorUntil = performance.now() / 1000 + 1.6
+      }
       break
     }
     case 'audio':
@@ -342,9 +363,11 @@ export function handleEvent(ev: Record<string, any>) {
       audio.duck(false)
       break
     case 'confirm_request':
+      rig.warnUntil = performance.now() / 1000 + 45   // âmbar enquanto espera o "sim"
       useJarvis.setState({ confirm: { id: ev.id, text: ev.text } })
       break
     case 'confirm_closed':
+      rig.warnUntil = 0
       if (J().confirm?.id === ev.id) useJarvis.setState({ confirm: null })
       break
     case 'system':
@@ -359,12 +382,26 @@ export function handleEvent(ev: Record<string, any>) {
     case 'devices':
       useJarvis.setState({ devices: ev.devices })
       break
+    case 'lists':
+      useJarvis.setState({ lists: ev.lists })
+      break
+    case 'pomodoro':
+      useJarvis.setState({ pomodoro: ev.pomodoro ? { ...ev.pomodoro, at: now } : null })
+      break
+    case 'remote': {
+      // pedido feito pelo celular ou pelo Telegram: aparece no HUD e no histórico
+      const who = ev.origin === 'telegram' ? 'Telegram' : 'Celular'
+      log('aviso', `${who}: “${ev.text}” → ${ev.reply || 'sem resposta'}`)
+      useJarvis.setState({ notice: { message: `${ev.origin === 'telegram' ? '✈' : '📱'} ${who}: ${ev.text} → ${ev.reply || '…'}`, ts: now } })
+      break
+    }
     case 'agenda':
       useJarvis.setState({ agenda: ev.agenda })
       break
     case 'reminder':
       // lembretes, cenas agendadas e avisos da fechadura: destaque no topo + histórico
       useJarvis.setState({ toast: { text: ev.text, ts: now } })
+      rig.warnUntil = Math.max(rig.warnUntil, performance.now() / 1000 + 2.5)
       log('lembrete', ev.text)
       break
     case 'computer':
@@ -381,6 +418,7 @@ export function handleEvent(ev: Record<string, any>) {
         else show('map')
       } else if (ev.action === 'intro_done') introDone = true
       else if (ev.action === 'talk' && !J().locked) bridge.talk()
+      else if (ev.action === 'game') useJarvis.setState({ game: !!ev.on, notice: { message: ev.on ? 'Modo jogo: HUD pausado para liberar a placa de vídeo.' : 'Modo jogo desligado.', ts: now } })
       break
   }
 }

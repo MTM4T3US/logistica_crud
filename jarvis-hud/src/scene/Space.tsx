@@ -34,6 +34,7 @@ export function Space({ detail }: { detail: number }) {
       uR: { value: STAGE.planet.radius },
       uTime: { value: 0 },
       uMap: { value: 0 },
+      uNight: { value: 0 },
       uGlow: { value: 1 },
       uDetail: { value: detail },
       // manchas urbanas posicionadas como na referência: lado esquerdo, meia altura
@@ -47,6 +48,7 @@ export function Space({ detail }: { detail: number }) {
     u.uCamWorld.value.copy(camera.matrixWorld)
     u.uTime.value = rig.t
     u.uMap.value = rig.mapT
+    u.uNight.value = rig.nightT
     u.uGlow.value = rig.glow
     u.uDetail.value = detail
   })
@@ -71,7 +73,7 @@ export function Space({ detail }: { detail: number }) {
         fragmentShader={
           /* glsl */ `
           precision highp float;
-          uniform vec3 uCenter; uniform float uR; uniform float uTime; uniform float uMap; uniform float uGlow; uniform float uDetail; uniform vec3 uCity[4];
+          uniform vec3 uCenter; uniform float uR; uniform float uTime; uniform float uMap; uniform float uNight; uniform float uGlow; uniform float uDetail; uniform vec3 uCity[4];
           varying vec3 vDir;
           ${NOISE}
           mat3 rotY(float a){ float c=cos(a), s=sin(a); return mat3(c,0.,s, 0.,1.,0., -s,0.,c); }
@@ -139,6 +141,7 @@ export function Space({ detail }: { detail: number }) {
 
             // no mapa o fundo vira névoa azul da baixa atmosfera
             vec3 haze = mix(vec3(.2, .37, .78), vec3(.36, .55, .95), smoothstep(-.2, .5, rd.y));
+            haze = mix(haze, mix(vec3(.03, .06, .16), vec3(.06, .11, .28), smoothstep(-.2, .5, rd.y)), uNight * .85);
             col = mix(col, haze, smoothstep(.45, .55, uMap));
             gl_FragColor = vec4(col, 1.);
           }`
