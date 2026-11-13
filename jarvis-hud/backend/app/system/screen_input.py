@@ -10,6 +10,7 @@ Regras que valem para tudo que passa por aqui:
 from __future__ import annotations
 
 import ctypes
+import re
 import struct
 import sys
 import time
@@ -59,6 +60,21 @@ def normalize_combo(keys: str) -> str:
 def is_terminal(title: str, exe: str) -> bool:
     t = (title or "").lower()
     return (exe or "").lower() in TERMINAL_EXES or any(t == k or t.startswith(k + " ") or f" - {k}" in t for k in TERMINAL_TITLES)
+
+
+#: arquivos e programas onde o JARVIS nunca digita nem manda atalhos (seleciona tudo, copia, cola…).
+#: Visto no Windows (0.5.2): "abre o bloco de notas" trouxe a janela já aberta com a aba ".env" e o
+#: "digita / seleciona tudo / copia" atuou dentro do arquivo da chave do Gemini.
+SENSITIVE_FILE = re.compile(
+    r"(^|[\s\\/*•●])(\.env(\.\w+)?|secrets?\.(h|json|ya?ml|txt)|tinytuya\.json|devices\.json|rosto\.json|"
+    r"credentials?\.\w+|id_rsa\w*|[\w.-]+\.(pem|key|pfx|p12|kdbx|ppk))(\s|$|\s-)", re.IGNORECASE)
+SENSITIVE_WORDS = re.compile(r"\b(senhas?|passwords?|keepass\w*|bitwarden|1password|gerenciador de senhas)\b", re.IGNORECASE)
+SENSITIVE_EXES = {"keepass.exe", "keepassxc.exe", "bitwarden.exe", "1password.exe"}
+
+
+def is_sensitive(title: str, exe: str) -> bool:
+    t = title or ""
+    return (exe or "").lower() in SENSITIVE_EXES or bool(SENSITIVE_FILE.search(t) or SENSITIVE_WORDS.search(t))
 
 
 def encode_png(width: int, height: int, rgb: bytes) -> bytes:
@@ -267,6 +283,9 @@ def guard(si: ScreenInput, kind: str, combo: str = "") -> str | None:
     title, exe = si.foreground()
     if kind in ("type", "combo") and is_terminal(title, exe):
         return f"Recusado: a janela em foco (“{title or exe}”) é um terminal ou o Executar — o JARVIS não digita onde o texto vira comando."
+    if kind in ("type", "combo") and is_sensitive(title, exe):
+        return (f"Recusado: a janela em foco (“{title or exe}”) parece ser um arquivo de senhas, chaves ou configuração "
+                "secreta — o JARVIS não digita nem usa atalhos nela. Abra um documento em branco e peça de novo.")
     if kind == "combo" and combo not in ALLOWED_COMBOS:
         return f"Atalho “{combo}” fora da lista permitida."
     return None

@@ -34,6 +34,15 @@ CONNECT_BUDGET_S = 25.0                  # prazo total para conectar (todas as t
 IDLE_DISCONNECT_S = 300.0                # solta a fita depois de 5 min parada (o app do celular volta a funcionar)
 
 
+RADIO_OFF_MSG = "O Bluetooth do Windows está desligado. Ligue-o (Central de ações → Bluetooth) e tente de novo."
+
+
+def _radio_off(exc: BaseException) -> bool:
+    """bleak: BleakBluetoothNotAvailableError ("Bluetooth radio is not powered on")."""
+    text = f"{type(exc).__name__} {exc}".lower()
+    return "notavailable" in text.replace(" ", "") or "not powered on" in text or "powered_off" in text
+
+
 def cmd_power(on: bool) -> bytes:
     return bytes([0x7E, 0x04, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00, 0xEF]) if on else bytes([0x7E, 0x04, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x00, 0xEF])
 
@@ -206,7 +215,8 @@ class ElkBleddmLeds(Device):
             try:
                 found = await self.t.scan(self.name_prefix, 8.0)
             except Exception as exc:
-                self.link, self.last_error = "falha", f"Bluetooth indisponível ({type(exc).__name__}: {exc})."
+                msg = RADIO_OFF_MSG if _radio_off(exc) else f"Bluetooth indisponível ({type(exc).__name__}: {exc})."
+                self.link, self.last_error = "falha", msg
                 return self.last_error
             if not found:
                 self.link, self.last_error = "falha", f"Nenhuma fita “{self.name_prefix}” encontrada por perto. Ela está ligada e fora do app do celular?"
@@ -235,6 +245,10 @@ class ElkBleddmLeds(Device):
                     break
                 last = f"{type(exc).__name__}: {exc}"   # só esta tentativa expirou: tenta de novo
             except Exception as exc:
+                if _radio_off(exc):
+                    # sem rádio Bluetooth nenhuma tentativa pode dar certo (visto no Windows: Bluetooth desligado)
+                    self.link, self.last_error = "falha", RADIO_OFF_MSG
+                    return self.last_error
                 not_found = not_found or "NotFound" in type(exc).__name__
                 last = f"{type(exc).__name__}: {exc}"
         self.link = "falha"

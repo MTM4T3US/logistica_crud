@@ -870,3 +870,67 @@ async def test_lock_events_become_hud_alerts(firmware_bins, settings, perms):
 def test_brightness_goes_to_the_right_place_after_the_windows_merge(text, tool):
     plan = LocalRouter(Permissions(), lambda: {"set_lights", "set_brightness"}).match(text)
     assert plan is not None and plan.calls[0].name == tool
+
+
+async def test_leds_bluetooth_radio_off_gives_clear_message_without_retries():
+    """Visto no Windows (0.5.2): com o Bluetooth desligado, 3 tentativas e a mensagem
+    "BleakBluetoothNotAvailableError: ('Bluetooth radio is not powered on…')"."""
+    from app.devices.elk_bleddm import ElkBleddmLeds
+
+    class RadioOff:
+        connects = 0
+
+        async def connect(self, address, on_disconnect):
+            self.connects += 1
+            raise type("BleakBluetoothNotAvailableError", (Exception,), {})("Bluetooth radio is not powered on. Turn on Bluetooth and try again.")
+
+        @property
+        def connected(self):
+            return False
+
+    async def nosleep(_s):
+        return None
+
+    ble = RadioOff()
+    res = await ElkBleddmLeds("AA:BB", transport=ble, sleep=nosleep).command("color", {"color": "#0000ff"})
+    assert res.executed is False and ble.connects == 1
+    assert "Bluetooth do Windows está desligado" in res.message and "Bleak" not in res.message
+
+
+def test_router_launch_reply_uses_the_real_program_name():
+    """Visto no Windows (0.5.2): "abre o Word" respondia "senhor, word aberto."."""
+    from app.ai.base import ToolCall, ToolOutcome
+    from app.router import _launched
+
+    ok = ToolOutcome(ToolCall("1", "launch_app", {"name": "word"}), True, True, "Word aberto — janela “Word” apareceu.")
+    assert _launched("word")([ok], "senhor") == "Word aberto, senhor."
+    fail = ToolOutcome(ToolCall("1", "launch_app", {"name": "{x}"}), False, False, "Não encontrei “{x}” no Menu Iniciar.")
+    assert _launched("{x}")([fail], "senhor").startswith("Não consegui, senhor")
+
+
+def test_typing_and_shortcuts_refused_in_sensitive_windows():
+    """Visto no Windows (0.5.2): "digita / seleciona tudo / copia" atuou na aba ".env" do Bloco de Notas."""
+    from app.system.screen_input import guard, is_sensitive
+
+    class Si:
+        def __init__(self, title, exe="notepad.exe"):
+            self.t, self.e = title, exe
+
+        def foreground(self):
+            return self.t, self.e
+
+    for title in (" .env - Bloco de notas", "*.env - Bloco de notas", "secrets.h - Arduino IDE", r"C:\pasta\.env.local - Notepad++",
+                  "chave.pem - Bloco de notas", "Senhas.kdbx - KeePass", "tinytuya.json - Bloco de notas"):
+        assert is_sensitive(title, "notepad.exe"), title
+        assert "Recusado" in (guard(Si(title), "type") or "") and "Recusado" in (guard(Si(title), "combo", "ctrl+a") or "")
+    for title in ("Sem título - Bloco de notas", "relatorio.docx - Word", "environment notes - Bloco de notas", "YouTube - Brave"):
+        assert not is_sensitive(title, "notepad.exe"), title
+    assert guard(Si("Sem título - Bloco de notas"), "type") is None
+
+
+def test_router_types_text_with_original_case(perms):
+    from app.router import LocalRouter
+
+    r = LocalRouter(perms, lambda: {"type_text"}, "jarvis")
+    plan = r.match("Jarvis, digita: teste do JARVIS")
+    assert plan is not None and plan.calls[0].args == {"text": "teste do JARVIS"}

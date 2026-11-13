@@ -84,6 +84,23 @@ def _report(ok_text: str) -> Callable[[list[ToolOutcome], str], str]:
     return render
 
 
+def _launched(spoken: str) -> Callable[[list[ToolOutcome], str], str]:
+    """Resposta de "abre o <programa>" (0.5): usa o nome REAL encontrado no Menu Iniciar ("Word"), não o
+    que foi falado ("word"). Visto no Windows: "senhor, word aberto." em vez de "Word aberto, senhor."
+    As chaves do nome falado são escapadas (um "{" no texto quebrava o format)."""
+    safe = spoken.replace("{", "{{").replace("}", "}}")
+    fallback = _report(f"{safe} aberto, {{title}}.")
+
+    def render(outs: list[ToolOutcome], title: str) -> str:
+        o = outs[0] if outs else None
+        verified = not (o is not None and isinstance(o.data, dict) and o.data.get("verified") is False)
+        if o is not None and o.ok and o.executed and verified and " aberto" in o.summary:
+            return f"{o.summary.split(' aberto')[0]} aberto, {title}."
+        return fallback(outs, title)
+
+    return render
+
+
 class LocalRouter:
     def __init__(self, perms: Permissions, tool_names: Callable[[], set[str]], wake_word: str = "jarvis",
                  lights: Callable[[], list[tuple[str, str]]] | None = None):
@@ -95,6 +112,7 @@ class LocalRouter:
 
     # ------------------------------------------------------------------ entrada
     def match(self, text: str, allow_chat: bool = False) -> Plan | None:
+        self._raw = text or ""   # original (maiúsculas e acentos) para o "digita:" — match é síncrono
         t = fold(text)
         t = re.sub(rf"^(ei |ok |oi )?{self.wake}\b[ ,]*", "", t).strip(" ,")
         if not t:
@@ -325,7 +343,7 @@ class LocalRouter:
             m = re.search(r"\b(?:abr[aei]\w*|inici[ae]\w*|execut[ae]\w*|lanc[ae]\w*)\s+(?:o |a |os |as )?(?:programa |aplicativo |app )?(.+)$", t)
             name = m.group(1).strip() if m else ""
             if name and not re.search(r"\b(mapa|cidade|projeto|pasta|site|arquivo|janela|configurac\w*)\b|\.\w{2,3}\b|^(o|a|os|as)?\s*\d+$", name):
-                return Plan("app", [_call("launch_app", name=name[:60])], _report("{title}, " + name + " aberto."))
+                return Plan("app", [_call("launch_app", name=name[:60])], _launched(name[:60]))
         return None
 
     def _agenda(self, t: str, tools: set[str]) -> Plan | None:
@@ -422,7 +440,10 @@ class LocalRouter:
         if "type_text" in tools:
             m = re.search(r"^digit\w*:?\s+(.+)$", t)
             if m:
-                return Plan("pc", [_call("type_text", text=m.group(1)[:500])], _report("Digitado."))
+                # digita o texto como foi dito/escrito: visto no Windows, "teste do JARVIS" saía "teste do jarvis"
+                raw = re.search(r"(?i)\bdigit\w*:?\s+(.+)$", getattr(self, "_raw", "") or "")
+                typed = raw.group(1).strip() if raw else m.group(1)
+                return Plan("pc", [_call("type_text", text=typed[:500])], _report("Digitado."))
         if "press_keys" in tools:
             for words, combo in sorted(self.KEY_WORDS.items(), key=lambda kv: -len(kv[0])):
                 if re.fullmatch(rf"{words}( isso| tudo| o arquivo| a pagina)?", t):
