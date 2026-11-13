@@ -31,7 +31,9 @@ VK = {
     "backspace": 0x08, "delete": 0x2E, "del": 0x2E, "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
     "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27, "printscreen": 0x2C,
     **{f"f{i}": 0x6F + i for i in range(1, 13)},
-    **{chr(c): c for c in range(ord("a"), ord("z") + 1)},
+    # tecla virtual de letra = código da MAIÚSCULA (0x41–0x5A). 0x61–0x6A são as do teclado numérico:
+    # visto no Windows (0.5.2), "seleciona tudo"/"copia" mandavam Ctrl+Num1/Ctrl+Num3 e não copiavam nada.
+    **{chr(c): ord(chr(c).upper()) for c in range(ord("a"), ord("z") + 1)},
     **{str(d): 0x30 + d for d in range(10)},
 }
 #: atalhos permitidos (normalizados, em ordem: modificadores + tecla)

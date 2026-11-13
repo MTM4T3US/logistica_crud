@@ -94,3 +94,22 @@ Na revisão manual apareceu um conflito de sentido, já corrigido: depois da cor
 30%" vai para as luzes), "brilho do notebook em 60" iria para os LEDs. Agora vai para a tela.
 
 **Resultado:** 272 testes do núcleo e o teste de navegador com 14 de 14.
+
+## Atualização 0.5.3 — teste da 0.5.2 no Windows
+
+O patch do teste (5 arquivos, sem segredos nem dados pessoais) aplicou limpo sobre a 0.5.2. Ele trouxe:
+- recusa de digitar e de atalhos em janelas de arquivos sensíveis (.env, secrets, chaves, cofres de senha);
+- "digita" com maiúsculas;
+- "Word aberto, senhor.";
+- mensagem clara para o Bluetooth do Windows desligado.
+
+Depois, corrigi o que ficou observado no relatório:
+- **"seleciona tudo"/"copia" não copiavam: causa encontrada.** As teclas virtuais das letras eram o código ASCII da
+  minúscula (0x61 = Num1, 0x63 = Num3); o Windows usa o da maiúscula (0x41 = A, 0x43 = C). Digitar funcionava
+  porque usa Unicode, por isso a falha só aparecia nos atalhos.
+- **Agenda:** o título mantém as maiúsculas e os acentos ditos.
+- **Agenda:** frases sem verbo ("academia toda segunda às 8h") são entendidas localmente. Perguntas e outros comandos
+  com horário continuam fora.
+- **Notícias:** posts de redes sociais não entram como manchete.
+
+**Resultado:** 289 testes do núcleo.

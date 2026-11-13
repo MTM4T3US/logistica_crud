@@ -1,7 +1,7 @@
-# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.5.2
+# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.5.3
 
 > Cole TUDO abaixo da linha em uma sessão do Claude Code (app Claude Desktop ou terminal) aberta
-> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.5.2.zip`
+> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.5.3.zip`
 > (se a 0.3 já estava instalada: descompacte por cima, mantendo `backend\.env`, `backend\config\permissions.json` e `backend\data\`)
 > (ou clonou o branch `ccr-41dc01f1-0wlbjp` do repositório MTM4T3US/logistica_crud — a pasta é `jarvis-hud`).
 > Antes de colar: crie `jarvis-hud\backend\.env` a partir de `.env.example` e cole **você mesmo** a
@@ -14,9 +14,17 @@ testado em Linux na nuvem (testes automatizados, navegador headless com câmera 
 executado neste PC ainda**. Se uma sessão anterior já testou a 0.3 aqui, reaproveite o relatório dela e
 foque nas fases novas (12 a 16), repetindo só o que a atualização pode ter afetado.
 
-**Esta versão já inclui as suas correções da 0.3 e da 0.4** (o patch `jarvis-0.4-windows.patch` foi aplicado e
-juntado com a 0.5; os seus relatórios estão em `docs\RELATORIO_WINDOWS_0.3.md` e `0.4.md`). **Não reaplique o
-patch nem refaça as correções à mão.** Instale numa pasta NOVA e copie da pasta antiga só:
+**Esta versão já inclui TODAS as suas correções** — da 0.3, da 0.4 e do teste da 0.5.2 (os patches
+`jarvis-0.4-windows.patch` e `jarvis-0.5.2-windows-teste.patch` foram aplicados; seus relatórios estão em
+`docs\RELATORIO_WINDOWS_0.3/0.4/0.5.md`). **Não reaplique patches nem refaça correções à mão.**
+
+Novidades da 0.5.3 por causa do seu relatório da 0.5.2 — confira primeiro:
+- **"seleciona tudo"/"copia" não copiavam: causa encontrada.** As letras dos atalhos iam com o código do teclado
+  numérico (0x61/0x63 = Num1/Num3) em vez de 0x41/0x43. Corrigido. Repita na aba EM BRANCO do Bloco de Notas:
+  "digita: teste do JARVIS" → "seleciona tudo" → "copia" e confira a área de transferência.
+- O título dos compromissos mantém maiúsculas e acentos ("marca Teste do JARVIS amanhã às 9h").
+- "academia toda segunda às 8h" (sem "marca") agora é entendido localmente.
+- Posts de redes sociais (Instagram, Facebook, TikTok…) não entram mais como manchete. Instale numa pasta NOVA e copie da pasta antiga só:
 `backend\.env`, `backend\config\permissions.json`, `backend\data\` e `backend\models\` (não mostre o `.env`).
 Depois confira rapidamente que o que você já tinha validado continua igual (LEDs, efeito de entrada, roteador).
 
@@ -265,7 +273,7 @@ Leia `docs\FECHADURA.md` antes. **Regras extras:**
 
 ## Entrega
 
-Crie `jarvis-hud\docs\RELATORIO_WINDOWS_0.5.md` com:
+Crie `jarvis-hud\docs\RELATORIO_WINDOWS_0.5.3.md` com:
 
 1. Tabela por item: Fase · Teste · Status (REAL-OK / REAL-FALHOU / SÓ-API / SIMULADO / NÃO-TESTADO) · Evidência.
 2. Problemas encontrados e correções aplicadas (arquivo e motivo).

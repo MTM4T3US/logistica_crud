@@ -69,6 +69,15 @@ def _age(published: str, now: datetime) -> timedelta | None:
     return now - when.astimezone(timezone.utc)
 
 
+#: redes sociais não são manchete (visto no Windows: legenda de Instagram cortada e post de campanha eleitoral)
+SOCIAL = ("instagram", "facebook", "tiktok", "kwai", "threads", "twitter", "x.com", "linkedin", "whatsapp")
+
+
+def is_social(source: str) -> bool:
+    s = (source or "").lower()
+    return any(k in s for k in SOCIAL)
+
+
 def clean_item(item: dict[str, str]) -> dict[str, str]:
     """No Google Notícias o título vem como "Manchete - Fonte": separa a fonte."""
     title, source = item["title"].strip(), (item.get("source") or "").strip()
@@ -112,7 +121,10 @@ class NewsService:
             age = _age(item.get("published", ""), now)
             if age is not None and (age < -timedelta(minutes=10) or age > self.max_age):
                 continue                      # velha demais ou com data no futuro
-            items.append({**clean_item(item), "region": label})
+            item = clean_item(item)
+            if is_social(item.get("source", "")):
+                continue
+            items.append({**item, "region": label})
             if len(items) >= self.per_feed:
                 break
         return {"label": label, "source": source, "items": items, "error": None}

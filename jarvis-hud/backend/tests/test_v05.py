@@ -507,8 +507,8 @@ async def test_agenda_tools_add_list_and_remove_with_confirmation():
 
 
 @pytest.mark.parametrize("text,tool,args", [
-    ("marca dentista amanhã às 15h", "agenda_add", {"phrase": "dentista amanha as 15h"}),
-    ("me lembra de pagar a conta dia 20 às 9h", "agenda_add", {"phrase": "pagar a conta dia 20 as 9h"}),
+    ("marca dentista amanhã às 15h", "agenda_add", {"phrase": "dentista amanhã às 15h"}),
+    ("me lembra de pagar a conta dia 20 às 9h", "agenda_add", {"phrase": "pagar a conta dia 20 às 9h"}),
     ("o que eu tenho hoje", "agenda_list", {"day": "hoje"}),
     ("minha agenda de amanhã", "agenda_list", {"day": "amanha"}),
     ("meus compromissos da semana", "agenda_list", {"days": 7}),
@@ -934,3 +934,64 @@ def test_router_types_text_with_original_case(perms):
     r = LocalRouter(perms, lambda: {"type_text"}, "jarvis")
     plan = r.match("Jarvis, digita: teste do JARVIS")
     assert plan is not None and plan.calls[0].args == {"text": "teste do JARVIS"}
+
+
+
+# ---------------------------------------------------------------- correções depois do teste da 0.5.2 no Windows
+def test_letter_shortcuts_use_the_windows_virtual_key_of_the_capital_letter():
+    """Visto no Windows: "seleciona tudo"/"copia" não copiavam. As letras iam como 0x61/0x63 (Num1/Num3)."""
+    from app.system.screen_input import VK
+
+    assert (VK["a"], VK["c"], VK["v"], VK["x"], VK["z"], VK["s"]) == (0x41, 0x43, 0x56, 0x58, 0x5A, 0x53)
+    assert all(0x41 <= VK[chr(c)] <= 0x5A for c in range(ord("a"), ord("z") + 1)) and VK["0"] == 0x30
+
+
+async def test_agenda_keeps_the_capitals_and_accents_the_user_said():
+    from app.ai.agenda_tools import AgendaTools
+
+    plan = LocalRouter(Permissions(), lambda: {"agenda_add"}).match("Jarvis, marca Teste de lembrete do JARVIS amanhã às 9h")
+    assert plan.calls[0].args == {"phrase": "Teste de lembrete do JARVIS amanhã às 9h"}
+    a = Agenda(":memory:", clock=lambda: FRIDAY_10H)
+    reg = ToolRegistry(settings=Settings(), perms=Permissions(), monitor=SystemMonitor(), controller=FakeController(), devices=DeviceRegistry(simulators=False),
+                       weather=WeatherService(Settings().location, enabled=False), news=NewsService(None), memory=MemoryStore(":memory:"), memory_enabled=lambda: False)
+    reg.extensions.append(AgendaTools(a).specs)
+
+    async def quiet(_):
+        return None
+
+    out = await reg.execute(plan.calls[0], quiet, quiet)
+    assert out.summary == "Marcado: Teste de lembrete do JARVIS, amanhã às 9 horas." and a.all()[0]["title"] == "Teste de lembrete do JARVIS"
+
+
+@pytest.mark.parametrize("text,phrase", [
+    ("academia toda segunda às 8h", "academia toda segunda às 8h"),
+    ("Jarvis, dentista amanhã às 15h", "dentista amanhã às 15h"),
+    ("Reunião com o João sexta às 14h", "Reunião com o João sexta às 14h"),
+])
+def test_appointments_without_a_verb_are_understood_locally(text, phrase):
+    plan = LocalRouter(Permissions(), lambda: {"agenda_add", "agenda_list", "shutdown_pc", "get_local_time"}).match(text)
+    assert plan is not None and plan.calls[0].name == "agenda_add" and plan.calls[0].args == {"phrase": phrase}
+
+
+@pytest.mark.parametrize("text", ["que horas são", "e amanhã às 10h?", "desliga o computador às 22h", "o que eu tenho amanhã às 9h",
+                                  "aniversário da mãe dia 20/11", "volume 30", "abre o 2"])
+def test_not_everything_with_a_time_becomes_an_appointment(text):
+    plan = LocalRouter(Permissions(), lambda: {"agenda_add", "agenda_list", "shutdown_pc", "get_local_time", "set_volume", "open_file"}).match(text)
+    assert plan is None or plan.calls[0].name != "agenda_add" or "marca" in text, text
+
+
+def test_social_media_posts_are_not_headlines():
+    import asyncio
+
+    now = _dt.now(__import__("datetime").timezone.utc)
+    fresh = __import__("email.utils").utils.format_datetime(now - _td(hours=2))
+    rss = ("<rss><channel>" + "".join(f"<item><title>{t} - {s}</title><link>https://n/{i}</link><pubDate>{fresh}</pubDate><source>{s}</source></item>"
+                                    for i, (t, s) in enumerate([("Vote no candidato X para prefeito", "Instagram"), ("Ponte reaberta", "Jornal Local"),
+                                                                 ("Post da campanha", "Facebook")])) + "</channel></rss>")
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, text=rss))) as client:
+            return await NewsService("https://news.example/rss", client=client).get()
+
+    data = asyncio.run(run())
+    assert [i["title"] for i in data["items"]] == ["Ponte reaberta"]

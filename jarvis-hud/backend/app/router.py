@@ -346,6 +346,18 @@ class LocalRouter:
                 return Plan("app", [_call("launch_app", name=name[:60])], _launched(name[:60]))
         return None
 
+    #: frases que começam assim são perguntas ou outros comandos, nunca um compromisso sem verbo
+    NOT_EVENT = re.compile(r"^(e |o que|que|qual|quais|quando|quanto|como|onde|tenho|liga|desliga|abr\w*|fech\w*|apag\w*|acend\w*|toc\w*|"
+                           r"coloc\w*|poe|aument\w*|diminu\w*|baix\w*|sob\w*|bloque\w*|tranc\w*|mostr\w*|pesquis\w*|procur\w*|mand\w*|digit\w*|"
+                           r"tir\w*|cancel\w*|desmarc\w*|paus\w*|volt\w*|vai|ativ\w*|desativ\w*|minimiz\w*|maximiz\w*|organiz\w*|pul\w*)\b")
+
+    def _raw_tail(self, pattern: str) -> str | None:
+        """O mesmo trecho na frase ORIGINAL (maiúsculas e acentos), para o título do compromisso.
+        Visto no Windows: "Teste de lembrete do JARVIS" virava "Teste de lembrete do jarvis"."""
+        raw = re.sub(rf"(?i)^\s*(?:(?:ei|ok|oi)\s+)?{self.wake}\b[\s,]*", "", getattr(self, "_raw", "") or "").strip()
+        m = re.match(pattern, raw, re.IGNORECASE)
+        return m.group(1).strip(" .!?") if m else None
+
     def _agenda(self, t: str, tools: set[str]) -> Plan | None:
         if "agenda_list" in tools:
             if re.search(r"\b(minha agenda|meus compromissos|meus horarios|o que (eu )?tenho|tenho (algum|alguma|compromisso)\w*|agenda (de|da|do|pra|para))\b|^agenda$|\bcompromissos (de|da|pra|para)\b", t):
@@ -356,11 +368,22 @@ class LocalRouter:
         if "agenda_add" in tools:
             m = re.match(r"^(?:marc\w*|agend\w*|anot\w*|lembr\w*|me lembr\w*|cri\w*|adicion\w*)\b(?: na (?:minha )?agenda| um compromisso| compromisso| um lembrete| lembrete| um evento| evento)?(?: de| que| pra| para)?\s+(.+)$", t)
             if m and parse_event(m.group(1), datetime.now()) is not None:      # sem data/hora: não é agenda (ex.: "lembra que…")
-                return Plan("agenda", [_call("agenda_add", phrase=m.group(1)[:200])], lambda o, title: o[0].summary)
+                raw = self._raw_tail(r"^(?:me\s+)?(?:marc\w*|agend\w*|anot\w*|lembr\w*|cri\w*|adicion\w*)(?:-me)?\b(?:\s+na\s+(?:minha\s+)?agenda|"
+                                     r"\s+(?:um\s+)?compromisso|\s+(?:um\s+)?lembrete|\s+(?:um\s+)?evento)?(?:\s+(?:de|que|pra|para))?\s+(.+)$")
+                phrase = raw if raw and parse_event(raw, datetime.now()) is not None else m.group(1)
+                return Plan("agenda", [_call("agenda_add", phrase=phrase[:200])], lambda o, title: o[0].summary)
         if "agenda_remove" in tools and re.search(r"\b(agenda|compromisso|lembrete|evento|desmarc\w*)\b", t):
             m = re.match(r"^(?:cancel\w*|desmarc\w*|apag\w*|remov\w*|exclu\w*|tir\w*)\b(?: o| a)?(?: compromisso| lembrete| evento)?(?: d[oae])?\s+(.+?)(?: da (?:minha )?agenda)?$", t)
             if m:
                 return Plan("agenda", [_call("agenda_remove", query=m.group(1)[:80])], lambda o, title: o[0].summary)
+        if "agenda_add" in tools and not self.NOT_EVENT.match(t):
+            # sem verbo: "academia toda segunda às 8h", "dentista amanhã às 15h" (visto no Windows: ia ao Gemini,
+            # que perguntava a data em vez de marcar). Só com hora ou repetição, e um nome de verdade.
+            ev = parse_event(t, datetime.now())
+            if ev and (ev["repeat"] or not ev["all_day"]) and len(re.sub(r"[^a-z]", "", fold(ev["title"]))) >= 3:
+                raw = self._raw_tail(r"^(.+)$")
+                phrase = raw if raw and parse_event(raw, datetime.now()) is not None else t
+                return Plan("agenda", [_call("agenda_add", phrase=phrase[:200])], lambda o, title: o[0].summary)
         return None
 
     ORDINALS = {"primeiro": 1, "segundo": 2, "terceiro": 3, "quarto": 4, "quinto": 5, "sexto": 6, "setimo": 7, "oitavo": 8, "nono": 9, "decimo": 10}

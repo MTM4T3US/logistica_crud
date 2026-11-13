@@ -59,7 +59,7 @@ def claims_action(text: str) -> bool:
     return bool(_ACTION_CLAIM.search(text or ""))
 from .voice.tts import STYLES, GeminiTTS, LocalTTS, PiperTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 MAX_TOOL_ROUNDS = 6
 CONFIRM_TIMEOUT_S = 45.0
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
