@@ -319,6 +319,9 @@ class WindowsController(SystemController):
             return ActionResult(False, False, "Controle de volume indisponível (pycaw não instalado ou sem dispositivo de saída).")
         if percent is not None:
             ep.SetMasterVolumeLevelScalar(max(0, min(100, int(percent))) / 100.0, None)
+            # "volume 30" com o Windows no mudo: quem pede um volume quer ouvir
+            if mute is None and int(percent) > 0:
+                mute = False
         if mute is not None:
             ep.SetMute(1 if mute else 0, None)
         return self.get_volume()

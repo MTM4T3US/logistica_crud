@@ -369,3 +369,32 @@ def test_map_route_reports_missing_map_without_an_http_error(client, monkeypatch
     r = client.get("/api/map", headers=auth())
     assert r.status_code == 200 and r.json()["ok"] is False and "OpenStreetMap" in r.json()["error"]
     assert client.get("/api/state", headers=auth()).json()["map"] == {"ready": False, "city": "Itumbiara"}
+
+
+def test_setting_a_volume_takes_windows_out_of_mute():
+    from app.system.windows import WindowsController
+
+    class Endpoint:
+        def __init__(self):
+            self.level, self.muted = 0.5, 1
+
+        def SetMasterVolumeLevelScalar(self, v, _):
+            self.level = v
+
+        def GetMasterVolumeLevelScalar(self):
+            return self.level
+
+        def SetMute(self, m, _):
+            self.muted = m
+
+        def GetMute(self):
+            return self.muted
+
+    ep = Endpoint()
+    ctl = WindowsController(spawn=lambda a: None, startfile=lambda p: None, which=lambda n: n, win=None, volume_endpoint=lambda: ep, verify_s=0)
+    assert ctl.set_volume(30).executed and ep.level == 0.3 and ep.muted == 0          # tira do mudo
+    ctl.set_volume(mute=True)
+    assert ep.muted == 1
+    ctl.set_volume(0)
+    assert ep.muted == 1                                                                 # volume 0 não mexe no mudo
+    assert ctl.step_volume(10).executed and ep.muted == 0 and abs(ep.level - 0.1) < 1e-9
