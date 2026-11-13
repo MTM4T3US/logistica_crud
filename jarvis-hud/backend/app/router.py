@@ -146,6 +146,12 @@ class LocalRouter:
             if plan:
                 return plan
         # ---- consultas
+        if "lock_hud" in tools and re.search(r"\b(bloque\w*|trav\w*|tranc\w*)\b.*\b(jarvis|sistema|hud|painel|tela|interface)\b", t):
+            return Plan("lock", [_call("lock_hud")], _report("Bloqueado, {title}. Até logo."))
+        if "city_briefing" in tools and re.search(r"\b(novidades|noticias|manchetes|resumo do dia|briefing)\b|\bcomo (esta|ta) a cidade\b|\bo que (esta acontecendo|aconteceu)\b", t):
+            return Plan("briefing", [_call("city_briefing")], self._say_briefing)
+        if re.search(r"\b(mostr|abr|exib|v[ae]\w* para)\w*\b.*\b(mapa|cidade)\b|\bmapa\b", t):
+            return Plan("map", [_call("show_map")], self._say_map)
         if re.search(r"\b(clima|temperatura|chover|chuva|previsao)\b|\bcomo (esta|ta) o tempo\b|\bfaz (calor|frio)\b", t):
             return Plan("weather", [_call("get_weather")], self._say_weather)
         if re.search(r"\b(que horas|que hora|horas sao|que dia|data de hoje)\b", t):
@@ -238,6 +244,17 @@ class LocalRouter:
         return None
 
     # ------------------------------------------------------------------ respostas faladas
+    @staticmethod
+    def _say_briefing(outs: list[ToolOutcome], title: str) -> str:
+        return outs[0].summary if outs and outs[0].executed else f"Não consegui o resumo agora, {title}."
+
+    @staticmethod
+    def _say_map(outs: list[ToolOutcome], title: str) -> str:
+        o = outs[0] if outs else None
+        if not o or not o.executed:
+            return f"Não consegui abrir o mapa, {title}."
+        return "Aqui está a cidade." if o.data.get("real_map") else "Abrindo o mapa. O mapa real ainda está sendo baixado; por enquanto é a cidade de demonstração."
+
     @staticmethod
     def _say_weather(outs: list[ToolOutcome], title: str) -> str:
         o = outs[0]

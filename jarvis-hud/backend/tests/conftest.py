@@ -29,7 +29,8 @@ def tone_wav(seconds: float = 0.6, rate: int = 16000, amp: float = 0.3, freq: fl
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(db_path=tmp_path / "jarvis.sqlite3", permissions_path=tmp_path / "permissions.json", weather_enabled=False)
+    # news_feeds=(): os testes nunca acessam a rede
+    return Settings(db_path=tmp_path / "jarvis.sqlite3", permissions_path=tmp_path / "permissions.json", weather_enabled=False, news_feeds=())
 
 
 @pytest.fixture

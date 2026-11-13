@@ -209,3 +209,37 @@ html, body, #root, .app { margin: 0; width: 100%; height: 100%; background: #010
 .settings pre.perf { white-space: pre-wrap; font: 11px/1.4 Consolas, monospace; background: #06183f; border: 1px solid rgba(80,170,255,.4); border-radius: 6px; padding: 8px; max-height: 260px; overflow: auto; }
 .settings .msg { position: sticky; bottom: 0; background: #06183f; border: 1px solid rgba(80, 170, 255, .5); border-radius: 6px; padding: 7px 10px; }
 @media (prefers-reduced-motion: reduce) { .feed-scan, .bar.run span, .cmd-row .mic.recording { animation: none; } }
+
+/* ---------- 0.4: entrada por rosto ---------- */
+.face-feed.live { background: #020a1c; }
+.face-feed.live video { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); filter: saturate(.25) brightness(1.05) sepia(.35) hue-rotate(160deg); }
+.face-feed .feed-off { position: absolute; inset: 0; display: grid; place-items: center; font: 700 calc(var(--u) * 1.1)/1 'Orbitron', sans-serif; letter-spacing: .2em; opacity: .7; }
+.face .bar { position: relative; }
+.face .bar .mark { position: absolute; top: -4px; bottom: -4px; width: 2px; background: #fff; box-shadow: 0 0 6px #fff; }
+.subtitle.err { color: #ffb59a; text-shadow: 0 0 calc(var(--u)) rgba(255, 120, 80, .7); }
+.dev em { font-style: normal; font: 700 .7em/1 'Orbitron', sans-serif; letter-spacing: .12em; color: var(--ok); margin-left: .5em; }
+
+.lock { position: absolute; z-index: 20; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+.lock.full { top: 0; bottom: 0; left: 0; right: 0; transform: none; justify-content: center; background: radial-gradient(ellipse at 50% 50%, rgba(1, 6, 24, .55), rgba(1, 3, 10, .9) 70%); }
+.lock.mini { bottom: 4.5%; }
+.lock-kicker { font: 500 calc(var(--u) * 1.2)/1 'Orbitron', sans-serif; letter-spacing: .4em; color: var(--cy); }
+.lock-title { font: 700 calc(var(--u) * 3.4)/1.2 'Orbitron', sans-serif; letter-spacing: .14em; color: var(--cy-hi); text-shadow: 0 0 calc(var(--u) * 1.6) rgba(80, 180, 255, .9); padding: 0 16px; }
+.lock-go { margin-top: 8px; font: 700 calc(var(--u) * 1.4)/1 'Orbitron', sans-serif; letter-spacing: .24em; color: #021232; background: var(--cy); border: 0; border-radius: 6px; padding: 16px 28px; cursor: pointer; box-shadow: 0 0 calc(var(--u) * 2.4) rgba(80, 190, 255, .8); }
+.lock-go:hover { background: var(--cy-hi); }
+.lock-note { max-width: 520px; font-size: 14px; color: #a9cbe8; padding: 0 16px; }
+.lock-alt { background: rgba(4, 22, 62, .85); border: 1px solid rgba(80, 170, 255, .55); color: #dcefff; border-radius: 6px; padding: 8px 16px; cursor: pointer; font: 600 13px/1 'Orbitron', sans-serif; letter-spacing: .14em; }
+.lock-alt.cancel { position: absolute; bottom: 4.5%; left: 50%; transform: translateX(-50%); z-index: 20; }
+.lock-pin { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.lock-pin input { width: 150px; font: 700 20px/1 'Orbitron', sans-serif; letter-spacing: .4em; text-align: center; padding: 10px; border-radius: 6px; border: 1px solid var(--cy); background: rgba(2, 10, 30, .9); color: var(--cy-hi); }
+.lock-pin button { font: 600 13px/1 'Orbitron', sans-serif; letter-spacing: .12em; padding: 12px 16px; border-radius: 6px; border: 1px solid var(--cy); background: var(--cy); color: #021232; cursor: pointer; }
+.lock-pin button.ghost { background: transparent; color: var(--cy); }
+.lock-pin button:disabled { opacity: .45; cursor: default; }
+.lock button:focus-visible, .lock input:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@media (max-width: 700px) { .lock-title { font-size: 22px; } .lock-go { font-size: 14px; padding: 14px 18px; } }
+.settings input[type='password'] { background: #06183f; color: #eaf6ff; border: 1px solid rgba(80, 170, 255, .5); border-radius: 6px; padding: 6px 8px; font: inherit; width: 100%; letter-spacing: .3em; }
+.settings .row { flex-wrap: wrap; }
+.settings button.danger { border-color: rgba(255, 130, 100, .6); background: rgba(255, 90, 60, .14); color: #ffd3c4; }
+.settings button:disabled { opacity: .45; cursor: default; }
+.settings label.file { position: relative; display: inline-flex; flex-direction: row; margin: 0; border: 1px solid rgba(80, 170, 255, .5); background: rgba(40, 120, 255, .16); color: #dcefff; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+.settings label.file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.settings label.file:focus-within { outline: 2px solid #fff; outline-offset: 2px; }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { audio } from '../core/audio'
-import { api, playSample, refresh, saveSettings, setMuted, setWake } from '../core/backend'
-import { useJarvis } from '../state/jarvis'
+import { api, deleteMusic, enrollFace, faceEnable, faceForget, lockNow, playSample, refresh, saveSettings, setMuted, setWake, testIntro, uploadMusic } from '../core/backend'
+import { useJarvis, type CoreState } from '../state/jarvis'
 import { useStore, type Quality } from '../state/store'
 import { DEMO_STATES } from './Hud'
 
@@ -229,6 +229,8 @@ export function Settings() {
             {j.mic === 'denied' && <p className="warn">O navegador negou o microfone. Libere a permissão no cadeado da barra de endereço.</p>}
           </section>
 
+          <Entrance core={core} />
+
           <section>
             <h3>PRIVACIDADE</h3>
             <p className="dim">
@@ -379,4 +381,68 @@ async function measure(set: (v: { running: boolean; left: number; text: string }
   } catch (e) {
     set({ running: false, left: 0, text: `Falhou: ${(e as Error).message}` })
   }
+}
+
+/** Entrada por rosto + música de entrada. O rosto vira só números (descritores) guardados neste PC. */
+function Entrance({ core }: { core: CoreState }) {
+  const face = core.face
+  const rt = core.runtime
+  const [pin, setPin] = useState('')
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [vol, setVol] = useState(rt.intro_music_volume ?? 0.7)
+  const [delay, setDelay] = useState(rt.intro_voice_delay_s ?? 5)
+  const save = (patch: Record<string, unknown>) => saveSettings(patch).catch((e) => setMsg((e as Error).message))
+  const pinOk = /^\d{4,12}$/.test(pin)
+  const needPin = !face?.pin_set
+  const onFile = async (file?: File) => {
+    if (!file) return
+    setBusy(true); setMsg('')
+    try { const r = await uploadMusic(file); setMsg(`Música salva neste computador: ${r.name}`) } catch (e) { setMsg((e as Error).message) } finally { setBusy(false) }
+  }
+  return (
+    <>
+      <section>
+        <h3>ENTRADA POR ROSTO</h3>
+        <p className={face?.active ? 'good' : 'dim'}>
+          {!face?.enrolled ? 'Nenhum rosto cadastrado: o JARVIS abre sem verificação.'
+            : face.active ? `Ligada · ${face.samples} capturas · semelhança mínima ${Math.round(face.threshold * 100)}% · prova de vida: ${face.liveness === 'piscar' ? 'piscar' : 'desligada'}`
+              : 'Cadastrada, mas desligada: o JARVIS abre sem verificação.'}
+        </p>
+        <label>{needPin ? 'PIN reserva (obrigatório, 4 a 12 dígitos)' : 'Novo PIN reserva (opcional)'}
+          <input type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} placeholder={needPin ? 'defina um PIN' : 'manter o atual'} />
+        </label>
+        <div className="row">
+          <button disabled={needPin ? !pinOk : !!pin && !pinOk} onClick={() => enrollFace(pin)}>{face?.enrolled ? 'Cadastrar de novo' : 'Cadastrar meu rosto'}</button>
+          {face?.enrolled && <button onClick={() => faceEnable(!face.enabled)}>{face.enabled ? 'Desligar a entrada' : 'Ligar a entrada'}</button>}
+          {face?.active && <button onClick={() => lockNow()}>Bloquear agora</button>}
+          {face?.enrolled && <button className="danger" onClick={() => { if (window.confirm('Apagar o rosto e o PIN deste computador?')) faceForget() }}>Apagar cadastro</button>}
+        </div>
+        <p className="dim">O cadastro pede uma piscada e 6 capturas, virando o rosto de leve. A câmera liga só durante a verificação e nada é gravado: guardo apenas números que descrevem o rosto, em backend/data/rosto.json. Isso protege o JARVIS de quem senta no seu computador — não substitui a senha do Windows nem serve para a fechadura.</p>
+      </section>
+
+      <section>
+        <h3>MÚSICA DE ENTRADA</h3>
+        <p className="dim">Escolha um arquivo de música seu (MP3, M4A, OGG, WAV…). Ele fica só neste computador e toca quando o seu rosto é confirmado; a música abaixa enquanto o JARVIS fala e some no fim do resumo.</p>
+        <p className={core.intro?.music ? 'good' : 'dim'}>{core.intro?.music ? `Atual: ${core.intro.music_name || 'arquivo salvo'}` : 'Nenhuma música escolhida.'}</p>
+        <div className="row">
+          <label className="file">
+            <input type="file" accept="audio/*,.mp3,.m4a,.ogg,.opus,.wav,.flac,.webm" disabled={busy} onChange={(e) => void onFile(e.target.files?.[0])} />
+            {busy ? 'Enviando…' : core.intro?.music ? 'Trocar música' : 'Escolher música'}
+          </label>
+          {core.intro?.music && <button onClick={() => void deleteMusic().catch((e) => setMsg((e as Error).message))}>Remover</button>}
+          <button onClick={() => testIntro()}>Testar a entrada agora</button>
+        </div>
+        <label className="check"><input type="checkbox" checked={rt.intro_enabled !== false} onChange={(e) => void save({ intro_enabled: e.target.checked })} />Boas-vindas, clima e notícias depois do rosto</label>
+        <label>Volume da música: {Math.round(vol * 100)}%
+          <input type="range" min={0} max={1} step={0.05} value={vol} onChange={(e) => setVol(Number(e.target.value))} onPointerUp={() => void save({ intro_music_volume: vol })} onKeyUp={() => void save({ intro_music_volume: vol })} />
+        </label>
+        <label>O JARVIS começa a falar depois de {delay} s de música
+          <input type="range" min={0} max={20} step={1} value={delay} onChange={(e) => setDelay(Number(e.target.value))} onPointerUp={() => void save({ intro_voice_delay_s: delay })} onKeyUp={() => void save({ intro_voice_delay_s: delay })} />
+        </label>
+        <p className="dim">Notícias: {core.news.enabled ? `Google Notícias — ${(core.news.feeds ?? []).join(' e ')}` : 'desligadas (JARVIS_NEWS_FEEDS=off)'}.</p>
+        {msg && <p className="warn">{msg}</p>}
+      </section>
+    </>
+  )
 }

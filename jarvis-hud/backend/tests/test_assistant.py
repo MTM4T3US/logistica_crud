@@ -317,7 +317,7 @@ async def test_runtime_settings_are_validated_and_persisted(settings, perms):
     assert core.update_runtime({"tts_voice_gemini": "Orus; drop table"})["tts_voice_gemini"] == "Orus"
     state = await core.state()
     assert state["location"]["city"] == "Itumbiara" and state["ai"]["configured"] is True and state["voice"]["wake_word"] == "jarvis"
-    assert all(d["simulated"] for d in state["devices"]) and state["news"] == {"enabled": False}
+    assert all(d["simulated"] for d in state["devices"]) and state["news"] == {"enabled": False, "feeds": []}
     engine = FakeTTS("local")
     sampler = build(settings, perms, tts={"local": engine})[0]
     sample = await sampler.voice_sample("local", "v1")

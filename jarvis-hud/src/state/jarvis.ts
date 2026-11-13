@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import { audio, liveAudio, type MicState } from '../core/audio'
+import { faceCam, type FaceResultEvent } from '../core/face'
+import { rig } from './rig'
 import { useStore } from './store'
+import type { CityData } from '../scene/RealCity'
 
 /* Tipos espelhando os eventos do backend (backend/app/assistant.py). */
 export interface WeatherData {
@@ -24,6 +27,7 @@ export interface CoreState {
   timings?: Timings | null
   location: { city: string; state: string; state_code: string; country: string; timezone: string; language: string }
   runtime: {
+    intro_enabled?: boolean; intro_music_volume?: number; intro_voice_delay_s?: number
     tts_engine: string; tts_voice_gemini: string; tts_voice_local: string; tts_voice_piper: string; tts_style: string; stt_engine: string; speak: boolean
     memory_enabled: boolean; cloud_audio_consent: boolean; user_title: string; chat_model: string; tts_model: string; tts_speed: number
     router_mode: string; continuous_consent: boolean; barge_in: boolean
@@ -35,11 +39,16 @@ export interface CoreState {
   permissions: { source: string; apps: { id: string; name: string }[]; folders: { id: string; name: string }[]; routines: { id: string; name: string }[] }
   system_actions: { platform: string; open_app: boolean; open_folder: boolean; volume: boolean }
   devices: DeviceData[]
-  news: { enabled: boolean }
+  news: { enabled: boolean; feeds?: string[] }
+  face?: FaceGateState
+  intro?: { music: boolean; music_name: string }
+  map?: { ready: boolean; city: string; counts?: Record<string, number>; attribution?: string }
 }
+export interface FaceGateState { enrolled: boolean; enabled: boolean; active: boolean; unlocked: boolean; pin_set: boolean; threshold: number; liveness: string; samples: number; cooldown_s: number; antispoof_min: number }
+export interface Briefing { welcome: string; briefing: string; city: string; weather: Record<string, unknown> | null; headlines: { title: string; source: string; region: string; link: string }[] }
 export interface Line { id: number; role: 'user' | 'assistant'; text: string; source?: string; partial?: boolean; mode?: string; interrupted?: boolean }
 export interface ToolEntry { id: string; name: string; label: string; stage: 'start' | 'end'; ok?: boolean; executed?: boolean; simulated?: boolean; summary?: string; ts: number }
-export interface NewsData { ok: boolean; source?: string; items: { title: string; link: string; published: string }[] }
+export interface NewsData { ok: boolean; source?: string; items: { title: string; link: string; published: string; source?: string; region?: string }[] }
 
 type Conn = 'offline' | 'connecting' | 'online'
 
@@ -64,14 +73,79 @@ interface JarvisState {
   continuousAsk: boolean
   consentAsk: boolean
   settingsOpen: boolean
+  /** entrada por rosto ativa e ainda não confirmada */
+  locked: boolean
+  /** resumo real da cidade da última entrada (clima + manchetes) */
+  briefing: Briefing | null
+  /** mapa real da cidade (OpenStreetMap), quando já baixado */
+  cityMap: CityData | null
   set: (patch: Partial<JarvisState>) => void
 }
 
 export const useJarvis = create<JarvisState>((set) => ({
   conn: 'connecting', core: null, busy: false, activity: '', lines: [], tools: [], weather: null, system: null, devices: [], news: null,
   error: null, notice: null, confirm: null, mic: 'off', wake: false, consentAsk: false, continuousAsk: false, settingsOpen: false,
+  locked: false, briefing: null, cityMap: null,
   set: (patch) => set(patch),
 }))
+
+/** Ligações com o canal do núcleo (preenchidas por core/backend.ts, sem importação circular). */
+export const bridge = {
+  send: (_msg: Record<string, unknown>) => false as boolean,
+  fetchMusic: async (): Promise<ArrayBuffer | null> => null,
+  fetchMap: async (): Promise<CityData | null> => null,
+}
+
+let mapLoading = false
+/** Carrega o mapa real (a 1ª vez o núcleo baixa do OpenStreetMap; depois vem do arquivo salvo). */
+export async function loadCityMap() {
+  if (mapLoading || J().cityMap || J().locked) return
+  mapLoading = true
+  try {
+    const data = await bridge.fetchMap()
+    if (data) useJarvis.setState({ cityMap: data })
+  } finally {
+    mapLoading = false
+  }
+}
+
+// ------------------------------------------------------------------ entrada: rosto → música → boas-vindas → cidade
+let mapTurn = ''
+let introDone = false
+let introTimer = 0
+let introStarted = 0
+
+/** Começa a entrada (depois do rosto/PIN). A música é o arquivo do próprio usuário. */
+export async function startIntro() {
+  const core = J().core
+  const rt = core?.runtime
+  window.clearTimeout(introTimer)
+  mapTurn = ''
+  introDone = false
+  introStarted = performance.now()
+  let delay = 2.4
+  if (core?.intro?.music) {
+    const data = await bridge.fetchMusic().catch(() => null)
+    if (data) {
+      try {
+        await audio.playMusic(data, rt?.intro_music_volume ?? 0.7)
+        delay = Math.max(delay, rt?.intro_voice_delay_s ?? 5)
+      } catch {
+        useJarvis.setState({ notice: { message: 'Não consegui tocar a música de entrada (formato não suportado pelo navegador).', ts: Date.now() } })
+      }
+    }
+  }
+  introTimer = window.setTimeout(() => {
+    if (!bridge.send({ type: 'intro' })) audio.fadeMusic(3)
+  }, delay * 1000)
+}
+
+window.setInterval(() => {
+  // voa para a cidade quando o trecho do resumo começa a soar
+  if (mapTurn && (liveAudio.turn === mapTurn || !J().core?.runtime.speak)) { mapTurn = ''; show('map') }
+  // fim da entrada: a música some quando ele termina de falar (ou depois de 4 min, no máximo)
+  if (audio.musicPlaying && ((introDone && !liveAudio.speaking && !audio.active) || performance.now() - introStarted > 240_000)) audio.fadeMusic(5)
+}, 120)
 
 let lineId = 0
 let mapHold = 0
@@ -82,6 +156,7 @@ const J = () => useJarvis.getState()
 /** Só troca o estado visual se o HUD não estiver exibindo conteúdo de demonstração. */
 function show(mode: 'idle' | 'listening' | 'thinking' | 'speaking' | 'map') {
   const s = hud()
+  if (J().locked) return // bloqueado: a cena do rosto fica
   if (s.sequence) s.setSequence(false)
   if (s.mode === 'map' && !s.demo && (mode === 'speaking' || mode === 'thinking')) return // o mapa fica enquanto ele fala
   if (s.mode !== mode || s.demo) s.setLive(mode)
@@ -125,9 +200,35 @@ export function handleEvent(ev: Record<string, any>) {
   const now = Date.now()
   switch (ev.type) {
     case 'hello':
-    case 'state':
-      useJarvis.setState({ core: ev.state, devices: ev.state.devices, conn: 'online' })
+    case 'state': {
+      const face: FaceGateState | undefined = ev.state.face
+      const locked = !!face?.active && !face.unlocked
+      const was = J().locked
+      useJarvis.setState({ core: ev.state, devices: ev.state.devices, conn: 'online', locked })
       audio.bargeIn = ev.state.runtime?.barge_in ?? true
+      if (!locked && ev.state.map?.ready) void loadCityMap()
+      if (locked && !was) {
+        // bloqueado: cena do rosto até a confirmação
+        rig.faceOk = false
+        rig.faceScan = 0
+        audio.stop()
+        hud().setLive('face')
+        useJarvis.setState({ settingsOpen: false })
+      } else if (!locked && was) {
+        rig.faceOk = true
+        rig.faceScan = 1
+        if (ev.state.runtime?.intro_enabled !== false) void startIntro()
+        else window.setTimeout(() => { if (hud().mode === 'face') hud().setLive('idle') }, 2600)
+      }
+      break
+    }
+    case 'face_result':
+      faceCam.result(ev as unknown as FaceResultEvent)
+      if (ev.mode === 'face_enroll' || ev.mode === 'face_enable' || ev.mode === 'face_forget')
+        useJarvis.setState({ notice: { message: ev.message, ts: now } })
+      break
+    case 'locked':
+      useJarvis.setState({ notice: { message: ev.message, ts: now } })
       break
     case 'phase':
       if (ev.phase === 'thinking' || ev.phase === 'transcribing') {
@@ -219,7 +320,13 @@ export function handleEvent(ev: Record<string, any>) {
       useJarvis.setState({ devices: ev.devices })
       break
     case 'ui':
-      if (ev.action === 'show_map') show('map')
+      if (ev.action === 'intro') { useJarvis.setState({ briefing: ev.briefing }); void loadCityMap() }
+      else if (ev.action === 'show_map') {
+        void loadCityMap()
+        if (ev.briefing) useJarvis.setState({ briefing: ev.briefing })
+        if (ev.at_turn) mapTurn = ev.at_turn
+        else show('map')
+      } else if (ev.action === 'intro_done') introDone = true
       break
   }
 }

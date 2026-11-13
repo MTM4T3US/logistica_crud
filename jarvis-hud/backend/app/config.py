@@ -104,7 +104,17 @@ class Settings:
     # --- Serviços externos ---
     weather_enabled: bool = True
     news_rss_url: str | None = None
+    #: feeds de notícias (rótulo, url); None = padrão (Google Notícias da cidade e do Brasil)
+    news_feeds: tuple[tuple[str, str], ...] | None = None
     devices_simulators: bool = True
+    # --- Entrada por rosto (0.4) ---
+    face_threshold: float = 0.62      # semelhança mínima (0..1) para liberar
+    face_liveness: str = "piscar"     # piscar | desligado
+    face_relock_min: float = 2.0      # HUD fechado por mais que isso → pede o rosto de novo
+    face_antispoof_min: float = 0.0   # 0 = só registra a nota anti-foto; calibre no seu PC antes de ligar
+    # --- Mapa real (OpenStreetMap) ---
+    map_radius_m: int = 1800
+    overpass_url: str = "https://overpass-api.de/api/interpreter"
     allow_lan: bool = False  # acesso pela rede só com autorização explícita e token forte
     permissions_path: Path = BACKEND_DIR / "config" / "permissions.json"
     location: Location = field(default_factory=Location)
@@ -118,6 +128,21 @@ class Settings:
             return self.allowed_origins
         ports = {self.port, 5173, 4173}
         return tuple(f"http://{h}:{p}" for h in ("127.0.0.1", "localhost") for p in sorted(ports))
+
+
+def _feeds(raw: str | None) -> tuple[tuple[str, str], ...] | None:
+    """JARVIS_NEWS_FEEDS: vazio = padrão; "off" = desliga; "Rótulo|url;Rótulo|url" = os seus."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if raw.lower() in ("off", "desligado", "false", "0"):
+        return ()
+    out = []
+    for part in raw.split(";"):
+        label, _, url = part.partition("|")
+        if url.strip().startswith(("http://", "https://")):
+            out.append((label.strip() or "Notícias", url.strip()))
+    return tuple(out)
 
 
 def load_settings(env_file: Path | None = None) -> Settings:
@@ -179,6 +204,13 @@ def load_settings(env_file: Path | None = None) -> Settings:
         allowed_origins=origins,
         weather_enabled=_bool("JARVIS_WEATHER_ENABLED", True),
         news_rss_url=(os.getenv("JARVIS_NEWS_RSS_URL") or "").strip() or None,
+        news_feeds=_feeds(os.getenv("JARVIS_NEWS_FEEDS")),
+        face_threshold=_float("JARVIS_FACE_THRESHOLD", 0.62),
+        face_liveness=(os.getenv("JARVIS_FACE_LIVENESS") or "piscar").strip().lower(),
+        face_relock_min=_float("JARVIS_FACE_RELOCK_MIN", 2.0),
+        face_antispoof_min=_float("JARVIS_FACE_ANTISPOOF_MIN", 0.0),
+        map_radius_m=max(500, min(4000, _int("JARVIS_MAP_RADIUS_M", 1800) or 1800)),
+        overpass_url=(os.getenv("JARVIS_OVERPASS_URL") or "https://overpass-api.de/api/interpreter").strip(),
         devices_simulators=_bool("JARVIS_DEVICE_SIMULATORS", True),
         permissions_path=Path(os.getenv("JARVIS_PERMISSIONS_FILE", str(BACKEND_DIR / "config" / "permissions.json"))),
         location=loc,

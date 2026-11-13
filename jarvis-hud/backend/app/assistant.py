@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import WebSocket
@@ -22,7 +23,10 @@ from .devices.registry import DeviceRegistry
 from .memory.store import MemoryStore
 from .security.permissions import Permissions
 from .services.local_info import local_now
-from .services.news import NewsService
+from .services.briefing import compose as compose_briefing
+from .services.citymap import CityMap
+from .services.news import NewsService, default_feeds
+from .security.face_gate import FaceGate
 from .services.weather import WeatherService
 from .system.monitor import SystemMonitor
 from .system.windows import SystemController, get_controller
@@ -99,13 +103,18 @@ class Assistant:
         tts: VoiceOutput | None = None, stt: VoiceInput | None = None, wake: WakeDetector | None | bool = True,
     ):
         self.settings = settings
+        self.data_dir = settings.db_path.parent
+        self.gate = FaceGate(self.data_dir / "rosto.json", settings.face_threshold, settings.face_liveness,
+                             settings.face_relock_min * 60, settings.face_antispoof_min)
+        loc = settings.location
+        self.citymap = CityMap(self.data_dir / "mapa", loc.city, loc.latitude, loc.longitude, settings.map_radius_m, settings.overpass_url)
         self.memory = memory or MemoryStore(settings.db_path)
         self.perms = perms or Permissions.load(settings.permissions_path)
         self.controller = controller or get_controller()
         self.monitor = monitor or SystemMonitor()
         self.devices = devices or self._make_devices(settings)
         self.weather = weather or WeatherService(settings.location, enabled=settings.weather_enabled)
-        self.news = news or NewsService(settings.news_rss_url)
+        self.news = news or self._make_news(settings)
         self.gemini = gemini if gemini is not None else (GeminiProvider(settings) if settings.ai_configured else None)
         self.tts = tts or VoiceOutput(GeminiTTS(self.gemini, settings.tts_voice, settings.tts_style) if self.gemini else None, LocalTTS(),
                                       PiperTTS(settings.models_dir, settings.piper_model))
@@ -119,11 +128,26 @@ class Assistant:
         self.tools = ToolRegistry(
             settings=settings, perms=self.perms, monitor=self.monitor, controller=self.controller, devices=self.devices,
             weather=self.weather, news=self.news, memory=self.memory, memory_enabled=lambda: bool(self.runtime()["memory_enabled"]),
+            briefing=self.briefing, lock=self._lock_from_tool, map_status=lambda: self.citymap.status(),
         )
         self.router = LocalRouter(self.perms, lambda: set(self.tools.specs()), settings.wake_word)
         self.local = LocalProvider(self.router)
         self.last_ai_error: dict[str, str] | None = None
         self.last_timings: dict[str, float] | None = None
+
+    def _lock_from_tool(self) -> bool:
+        if not self.gate.active:
+            return False
+        self.gate.lock()
+        return True
+
+    @staticmethod
+    def _make_news(settings: Settings) -> NewsService:
+        if settings.news_rss_url:                       # compatibilidade com a 0.3
+            return NewsService(settings.news_rss_url)
+        if settings.news_feeds is not None:
+            return NewsService(feeds=list(settings.news_feeds))
+        return NewsService(feeds=default_feeds(settings.location.city, settings.location.state))
 
     @staticmethod
     def _make_devices(settings: Settings) -> DeviceRegistry:
@@ -151,6 +175,7 @@ class Assistant:
             "stt_engine": s.stt_engine, "speak": True, "memory_enabled": s.memory_enabled, "cloud_audio_consent": False, "user_title": "senhor",
             "chat_model": "", "tts_model": "", "tts_speed": 1.0, "router_mode": s.router_mode if s.router_mode in ("local_first", "ai_first") else "local_first",
             "continuous_consent": False, "barge_in": True,
+            "intro_enabled": True, "intro_music_volume": 0.7, "intro_voice_delay_s": 5.0,
         }
         saved = self.memory.get_setting("runtime", {}) or {}
         return {**defaults, **{k: v for k, v in saved.items() if k in defaults}}
@@ -172,10 +197,13 @@ class Assistant:
             "speak": lambda v: isinstance(v, bool), "memory_enabled": lambda v: isinstance(v, bool),
             "cloud_audio_consent": lambda v: isinstance(v, bool),
             "user_title": lambda v: isinstance(v, str) and 0 < len(v.strip()) <= 24,
+            "intro_enabled": lambda v: isinstance(v, bool),
+            "intro_music_volume": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= float(v) <= 1,
+            "intro_voice_delay_s": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= float(v) <= 30,
         }
         for key, value in patch.items():
             if key in rules and rules[key](value):
-                rt[key] = value.strip() if key == "user_title" else round(float(value), 2) if key == "tts_speed" else value
+                rt[key] = value.strip() if key == "user_title" else round(float(value), 2) if key in ("tts_speed", "intro_music_volume", "intro_voice_delay_s") else value
         self.memory.set_setting("runtime", rt)
         if "chat_model" in patch or "tts_model" in patch:
             self._apply_models(rt)
@@ -218,8 +246,11 @@ class Assistant:
             "permissions": self.perms.summary(),
             "system_actions": {"platform": self.controller.platform, **self.controller.capabilities()},
             "devices": self.devices.describe(),
-            "news": {"enabled": self.news.enabled},
+            "news": {"enabled": self.news.enabled, "feeds": [label for label, _ in self.news.feeds]},
             "weather_enabled": self.settings.weather_enabled,
+            "face": self.gate.status(),
+            "map": self.citymap.status(),
+            "intro": {"music": self.intro_music() is not None, "music_name": (self.memory.get_setting("intro_music", {}) or {}).get("name", "")},
         }
 
     async def _system_prompt(self) -> str:
@@ -487,6 +518,84 @@ class Assistant:
                 task.cancel()
             with contextlib.suppress(Exception):
                 await asyncio.shield(conn.send({"type": "speech_done", "turn": turn, "chunks": seq, "failed": state["failed"]}))
+
+    # ------------------------------------------------------------------ entrada: rosto → música → boas-vindas → cidade
+    MUSIC_TYPES = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+                   ".wav": "audio/wav", ".flac": "audio/flac", ".webm": "audio/webm"}
+    MUSIC_MAX_BYTES = 40 * 1024 * 1024
+
+    def intro_music(self) -> Path | None:
+        """A música de entrada é um arquivo do próprio usuário, guardado só neste computador."""
+        folder = self.data_dir / "entrada"
+        for ext in self.MUSIC_TYPES:
+            path = folder / f"musica{ext}"
+            if path.is_file():
+                return path
+        return None
+
+    @staticmethod
+    def _looks_like_audio(data: bytes) -> bool:
+        head = data[:12]
+        return (head[:3] == b"ID3" or (len(head) > 1 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0) or head[:4] in (b"OggS", b"RIFF", b"fLaC", b"\x1aE\xdf\xa3")
+                or head[4:8] == b"ftyp")
+
+    def save_intro_music(self, data: bytes, filename: str) -> dict[str, Any]:
+        ext = Path(filename).suffix.lower()
+        if ext not in self.MUSIC_TYPES:
+            raise ValueError("Formato não aceito. Use MP3, M4A, AAC, OGG, OPUS, WAV, FLAC ou WEBM.")
+        if not data or len(data) > self.MUSIC_MAX_BYTES:
+            raise ValueError("Arquivo vazio ou maior que 40 MB.")
+        if not self._looks_like_audio(data):
+            raise ValueError("O arquivo não parece ser de áudio.")
+        folder = self.data_dir / "entrada"
+        folder.mkdir(parents=True, exist_ok=True)
+        old = self.intro_music()
+        if old:
+            old.unlink()
+        (folder / f"musica{ext}").write_bytes(data)
+        name = Path(filename).name[:120]
+        self.memory.set_setting("intro_music", {"name": name, "bytes": len(data)})
+        return {"name": name, "bytes": len(data)}
+
+    def delete_intro_music(self) -> None:
+        old = self.intro_music()
+        if old:
+            old.unlink()
+        self.memory.set_setting("intro_music", {})
+
+    async def briefing(self) -> dict[str, Any]:
+        """Clima e notícias reais da cidade, em texto pronto para falar."""
+        async def nothing() -> None:
+            return None
+
+        rt = self.runtime()
+        weather, news = await asyncio.gather(self.weather.get(), self.news.get() if self.news.enabled else nothing())
+        return compose_briefing(local_now(self.settings.location), self.settings.location.city, rt["user_title"], weather, news)
+
+    async def speak_text(self, conn: Connection, turn: str, text: str, mode: str = "intro") -> None:
+        """Fala um texto pronto (sem IA), pela mesma cadeia de voz das respostas: 1 pedido de voz por bloco."""
+        rt = self.runtime()
+        await conn.send({"type": "delta", "turn": turn, "text": text})
+        speak = bool(rt["speak"]) and self.tts.resolve(rt["tts_engine"]) is not None
+        if speak:
+            queue: asyncio.Queue[str | None] = asyncio.Queue()
+            queue.put_nowait(text)
+            queue.put_nowait(None)
+            await self._speak_worker(conn, turn, queue, rt)
+        await conn.send({"type": "turn_end", "turn": turn, "text": text, "provider": "roteador", "model": "texto local", "mode": mode,
+                         "spoken": speak, "interrupted": False, "error": None, "ai": self.ai_status(), "timings": {}})
+
+    async def intro(self, conn: Connection) -> None:
+        """Depois do rosto confirmado: boas-vindas e, já sobre a cidade, clima e notícias."""
+        b = await self.briefing()
+        tag = uuid.uuid4().hex[:6]
+        welcome, city = f"intro-a-{tag}", f"intro-b-{tag}"
+        await conn.send({"type": "ui", "action": "intro", "briefing": b, "welcome_turn": welcome, "map_turn": city})
+        await self.speak_text(conn, welcome, b["welcome"])
+        # o HUD só voa para a cidade quando o áudio deste trecho começa a tocar
+        await conn.send({"type": "ui", "action": "show_map", "briefing": b, "at_turn": city})
+        await self.speak_text(conn, city, b["briefing"])
+        await conn.send({"type": "ui", "action": "intro_done"})
 
     # ------------------------------------------------------------------ voz do usuário
     async def handle_audio(self, conn: Connection, wav: bytes, mode: str = "ptt") -> None:

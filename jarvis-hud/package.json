@@ -1,10 +1,12 @@
 {
   "name": "jarvis-hud",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/copy-face-models.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/copy-face-models.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "capture": "node scripts/capture.mjs",
@@ -16,6 +18,7 @@
     "@fontsource/rajdhani": "^5.3.0",
     "@react-three/fiber": "^9.8.2",
     "@react-three/postprocessing": "^3.2.2",
+    "@vladmandic/human": "^3.3.6",
     "postprocessing": "^6.39.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

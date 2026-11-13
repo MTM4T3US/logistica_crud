@@ -5,6 +5,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import email.utils
+from datetime import datetime, timedelta, timezone
+
 import httpx
 import pytest
 
@@ -167,12 +170,15 @@ def test_local_time_uses_city_timezone():
 
 # ---------------------------------------------------------------- notícias
 async def test_news_is_off_without_source_and_parses_feeds():
-    assert (await NewsService(None).get()) == {"ok": False, "enabled": False, "items": [], "error": "Nenhuma fonte de notícias configurada (JARVIS_NEWS_RSS_URL)."}
+    off = await NewsService(None).get()
+    assert off["ok"] is False and off["enabled"] is False and off["items"] == [] and "desligadas" in off["error"]
     rss = "<rss><channel><item><title>Obra na ponte</title><link>https://ex.org/1</link><pubDate>Thu, 12 Nov 2026</pubDate></item></channel></rss>"
     atom = '<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Feira</title><link href="https://ex.org/2"/><updated>2026-11-12</updated></entry></feed>'
-    assert parse_feed(rss) == [{"title": "Obra na ponte", "link": "https://ex.org/1", "published": "Thu, 12 Nov 2026"}]
-    assert parse_feed(atom)[0] == {"title": "Feira", "link": "https://ex.org/2", "published": "2026-11-12"}
-    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, text=rss))) as client:
+    assert parse_feed(rss) == [{"title": "Obra na ponte", "link": "https://ex.org/1", "published": "Thu, 12 Nov 2026", "source": ""}]
+    assert parse_feed(atom)[0] == {"title": "Feira", "link": "https://ex.org/2", "published": "2026-11-12", "source": ""}
+    fresh = email.utils.format_datetime(datetime.now(timezone.utc) - timedelta(hours=3))
+    rss_now = rss.replace("Thu, 12 Nov 2026", fresh)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, text=rss_now))) as client:
         data = await NewsService("https://jornal.example/rss", client=client).get()
     assert data["ok"] and data["source"] == "jornal.example" and data["items"][0]["link"] == "https://ex.org/1"
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<quebrado"))) as client:

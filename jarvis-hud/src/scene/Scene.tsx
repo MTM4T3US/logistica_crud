@@ -9,6 +9,8 @@ import { Platform } from './Platform'
 import { Core } from './Core'
 import { FaceScan } from './FaceScan'
 import { City } from './City'
+import { RealCity } from './RealCity'
+import { useJarvis } from '../state/jarvis'
 import { Director } from './Director'
 import { rig } from '../state/rig'
 import { useStore } from '../state/store'
@@ -30,6 +32,19 @@ function Stage({ motes, facePoints }: { motes: number; facePoints: number }) {
   )
 }
 
+/** Cidade real (OpenStreetMap) quando o núcleo já baixou o mapa; senão, a cidade fictícia de demonstração. */
+function CityLayer({ blocks }: { blocks: number }) {
+  const map = useJarvis((s) => s.cityMap)
+  const demo = useStore((s) => s.demo)
+  const real = map && !demo
+  return (
+    <>
+      <City blocks={blocks} hidden={!!real} />
+      {real && <RealCity data={map} />}
+    </>
+  )
+}
+
 export function Scene() {
   const quality = useStore((s) => s.quality)
   const p = PROFILES[quality]
@@ -46,7 +61,7 @@ export function Scene() {
       <Director />
       <Space detail={1} />
       <Stage motes={p.motes} facePoints={p.facePoints} />
-      <City blocks={p.cityBlocks} />
+      <CityLayer blocks={p.cityBlocks} />
       <Core />
       {p.post && (
         <EffectComposer multisampling={p.msaa}>

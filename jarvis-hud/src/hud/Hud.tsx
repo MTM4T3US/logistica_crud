@@ -4,7 +4,9 @@ import { parseLine, WPS } from '../state/speech'
 import { MAP_SPEECH_DELAY } from '../scene/Director'
 import { audio, liveAudio } from '../core/audio'
 import { useJarvis, type DeviceData, type WeatherData } from '../state/jarvis'
-import { answerConfirm, interrupt, saveSettings, sendText, setMuted, setWake, toggleTalk } from '../core/backend'
+import { answerConfirm, cancelFace, interrupt, saveSettings, sendPin, sendText, setMuted, setWake, startFaceCheck, toggleTalk } from '../core/backend'
+import { useFace } from '../core/face'
+import { rig } from '../state/rig'
 import { Settings } from './Settings'
 
 /** Re-renderiza o HUD ~20×/s (relógio, legendas, porcentagens). */
@@ -25,7 +27,7 @@ function Badge() {
   const where = conn === 'online' ? (ai?.mode === 'ai' ? `NÚCLEO ONLINE · IA ${ai.provider.toUpperCase()}` : 'NÚCLEO ONLINE · MODO LOCAL (SEM IA)') : conn === 'connecting' ? 'CONECTANDO AO NÚCLEO…' : 'NÚCLEO OFFLINE'
   return (
     <div className="badge">
-      JARVIS OS 0.3 · {where}
+      JARVIS OS 0.4 · {where}
       {demo && <b className="demo">DEMO · DADOS SIMULADOS</b>}
     </div>
   )
@@ -73,7 +75,8 @@ function Status({ mode, modeT }: { mode: Mode; modeT: number }) {
   const activity = useJarvis((s) => s.activity)
   const error = useJarvis((s) => s.error)
   let label = STATUS[mode]
-  const faceOk = mode === 'face' && modeT >= FACE_SCAN_SECONDS
+  const facePhase = useFace((f) => f.phase)
+  const faceOk = mode === 'face' && (demo ? modeT >= FACE_SCAN_SECONDS : facePhase === 'ok' || rig.faceOk)
   if (demo) {
     if (faceOk) label = 'CONFIRMADO'
     if (mode === 'speaking' && modeT > parseLine(LINES[line] ?? LINES[0]).length / WPS + 0.6) label = 'EM ESPERA'
@@ -81,6 +84,7 @@ function Status({ mode, modeT }: { mode: Mode; modeT: number }) {
   } else {
     if (mode === 'thinking' && activity) label = activity
     if (mode === 'map' && liveAudio.speaking) label = 'JARVIS FALANDO'
+    if (faceOk) label = 'CONFIRMADO'
     if (error && Date.now() - error.ts < 2800) label = 'FALHA'
   }
   const failing = !demo && !!error && Date.now() - error.ts < 2800
@@ -134,6 +138,7 @@ function Subtitle({ mode, modeT }: { mode: Mode; modeT: number }) {
   const line = useStore((s) => s.line)
   const demo = useStore((s) => s.demo)
   const city = useJarvis((s) => s.core?.location.city) ?? 'Itumbiara'
+  if (!demo && mode === 'face') return <LiveFaceSubtitle />
   if (!demo) {
     if (liveAudio.subtitle) return <div className={`subtitle ${mode === 'map' ? 'map' : ''}`}><LiveWords text={liveAudio.subtitle} progress={liveAudio.progress} city={city} /></div>
     if (mode === 'listening') return <div className="subtitle soft">Ouvindo…</div>
@@ -157,6 +162,20 @@ function Subtitle({ mode, modeT }: { mode: Mode; modeT: number }) {
   }
   if (mode === 'listening') return <div className="subtitle soft">Ouvindo…</div>
   return null
+}
+
+function LiveFaceSubtitle() {
+  const f = useFace()
+  const title = useJarvis((s) => s.core?.runtime.user_title) ?? 'senhor'
+  if (f.phase === 'ok' || rig.faceOk)
+    return (
+      <div className="subtitle idok">
+        <strong>{f.mode === 'enroll' ? 'ROSTO CADASTRADO' : 'IDENTIDADE CONFIRMADA'}</strong>
+        <small>{f.mode === 'enroll' ? 'NESTE COMPUTADOR · SÓ NÚMEROS, NENHUMA IMAGEM' : `BEM-VINDO, ${title.toUpperCase()}`}</small>
+      </div>
+    )
+  if (f.phase === 'off') return null
+  return <div className={`subtitle ${f.phase === 'fail' || f.phase === 'error' || f.phase === 'cooldown' ? 'err' : ''}`}>{f.message}</div>
 }
 
 /** Clima real (Open-Meteo). Sem leitura do provedor, mostra "sem dados" — nunca um valor inventado. */
@@ -217,11 +236,18 @@ function NewsCard() {
   return (
     <div className="card card-news big">
       <div className="card-in">
-        <div className="kicker">NOTÍCIAS · {news.source?.toUpperCase()}</div>
-        {news.items.slice(0, 3).map((n, i) => <div className="news" key={i}>{n.title}<small>{n.published}</small></div>)}
+        <div className="kicker">NOTÍCIAS · GOOGLE NOTÍCIAS</div>
+        {news.items.slice(0, 3).map((n, i) => <div className="news" key={i}>{n.title}<small>{[n.region, n.source, ago(n.published)].filter(Boolean).join(' · ')}</small></div>)}
       </div>
     </div>
   )
+}
+
+function ago(published: string): string {
+  const t = Date.parse(published)
+  if (!t) return ''
+  const h = Math.round((Date.now() - t) / 3_600_000)
+  return h < 1 ? 'agora há pouco' : h < 48 ? `há ${h} h` : `há ${Math.round(h / 24)} dias`
 }
 
 function deviceText(d: DeviceData): string {
@@ -239,9 +265,9 @@ function Devices() {
   if (!devices.length) return null
   return (
     <div className="devices">
-      <div className="kicker">DISPOSITIVOS <b className="demo">SIMULADORES</b></div>
+      <div className="kicker">DISPOSITIVOS <b className="demo">{devices.every((d) => d.simulated) ? 'SIMULADORES' : 'REAIS + SIMULADORES'}</b></div>
       {devices.map((d) => (
-        <div className="dev" key={d.id}><i className={d.connected ? 'on' : ''} />{d.name}<span>{deviceText(d)}</span></div>
+        <div className="dev" key={d.id}><i className={d.connected ? 'on' : ''} />{d.name}{!d.simulated && <em> REAL</em>}<span>{deviceText(d)}</span></div>
       ))}
     </div>
   )
@@ -293,6 +319,79 @@ function FacePanels({ modeT }: { modeT: number }) {
         <ul>{steps.map(([label, at]) => <li key={label} className={k >= at ? 'on' : ''}><i />{label}</li>)}</ul>
         <div className="face-btn">{ok ? 'CONFIRMADO' : 'EM VERIFICAÇÃO'}</div>
       </div>
+    </div>
+  )
+}
+
+/** Entrada real: vídeo da câmera (só na tela, nunca gravado) e o progresso que o núcleo confirma. */
+function LiveFacePanels() {
+  const f = useFace()
+  const video = useRef<HTMLVideoElement>(null)
+  const threshold = useJarvis((s) => s.core?.face?.threshold ?? 0.62)
+  useEffect(() => {
+    if (video.current && video.current.srcObject !== f.stream) {
+      video.current.srcObject = f.stream
+      if (f.stream) void video.current.play().catch(() => undefined)
+    }
+  }, [f.stream])
+  const ok = f.phase === 'ok' || rig.faceOk
+  const steps: [string, boolean][] = [['ROSTO', f.found || ok], ['PROVA DE VIDA', f.blinked || ok], [f.mode === 'enroll' ? 'CADASTRO' : 'IDENTIDADE', ok]]
+  rig.faceScan = ok ? 1 : (f.found ? 0.34 : 0) + (f.blinked ? 0.33 : 0) + 0.33 * f.progress
+  const pct = f.similarity !== null ? Math.round(f.similarity * 100) : null
+  return (
+    <div className={`face ${ok ? 'ok' : ''}`}>
+      <div className="face-cam">
+        <div className="kicker">CÂMERA <b className="demo">{f.stream ? 'LOCAL · NADA É GRAVADO' : 'DESLIGADA'}</b></div>
+        <div className="face-feed live">
+          <video ref={video} muted playsInline />
+          {!f.stream && <span className="feed-off">{ok ? 'CÂMERA DESLIGADA' : '—'}</span>}
+          <span className="feed-scan" />
+        </div>
+      </div>
+      <div className="face-info">
+        <div className="kicker">{f.mode === 'enroll' ? 'CADASTRO DO ROSTO' : 'CORRESPONDÊNCIA'}</div>
+        <div className="face-pct">{f.mode === 'enroll' ? Math.round(f.progress * 100) : pct ?? '–'}<small>%</small></div>
+        <div className="bar"><span style={{ width: `${f.mode === 'enroll' ? f.progress * 100 : pct ?? 0}%` }} />{f.mode === 'verify' && <i className="mark" style={{ left: `${threshold * 100}%` }} />}</div>
+        <ul>{steps.map(([label, on]) => <li key={label} className={on ? 'on' : ''}><i />{label}</li>)}</ul>
+        {f.real !== null && <div className="kicker dim">ANTI-FOTO {Math.round(f.real * 100)}% · VIDA {f.live !== null ? Math.round(f.live * 100) : '–'}%</div>}
+        <div className="face-btn">{ok ? 'CONFIRMADO' : f.phase === 'checking' ? 'CONFERINDO…' : f.phase === 'cooldown' ? 'AGUARDE' : 'EM VERIFICAÇÃO'}</div>
+      </div>
+    </div>
+  )
+}
+
+/** Bloqueio: o JARVIS só abre com o rosto cadastrado (ou o PIN reserva). */
+function LockScreen() {
+  const f = useFace()
+  const pinSet = useJarvis((s) => s.core?.face?.pin_set)
+  const [pinOpen, setPinOpen] = useState(false)
+  const [pin, setPin] = useState('')
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => { if (e.key === 'Enter' && useFace.getState().phase === 'off' && !pinOpen) startFaceCheck() }
+    window.addEventListener('keydown', on)
+    return () => window.removeEventListener('keydown', on)
+  }, [pinOpen])
+  const idle = f.phase === 'off' || f.phase === 'error'
+  const submitPin = (e: React.FormEvent) => { e.preventDefault(); if (pin.length >= 4 && sendPin(pin)) setPin('') }
+  return (
+    <div className={`lock ${idle ? 'full' : 'mini'}`}>
+      {idle && (
+        <>
+          <div className="lock-kicker">JARVIS OS 0.4</div>
+          <div className="lock-title">IDENTIFICAÇÃO NECESSÁRIA</div>
+          {f.phase === 'error' && <div className="chip err">{f.message}</div>}
+          <button className="lock-go" onClick={startFaceCheck} autoFocus>INICIAR RECONHECIMENTO</button>
+          <div className="lock-note">A câmera é usada só neste computador. Nenhuma imagem é gravada ou enviada.</div>
+        </>
+      )}
+      {pinSet && (pinOpen ? (
+        <form className="lock-pin" onSubmit={submitPin}>
+          <input type="password" inputMode="numeric" autoComplete="off" maxLength={12} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} placeholder="PIN" aria-label="PIN reserva" autoFocus />
+          <button type="submit" disabled={pin.length < 4}>Entrar</button>
+          <button type="button" className="ghost" onClick={() => setPinOpen(false)}>Voltar</button>
+        </form>
+      ) : <button className="lock-alt" onClick={() => { setPinOpen(true); if (!idle) cancelFace() }}>Usar PIN</button>)}
+      {f.phase !== 'off' && useJarvis.getState().notice && <div className="chip">{useJarvis.getState().notice!.message}</div>}
     </div>
   )
 }
@@ -441,6 +540,8 @@ export function Hud() {
   const conn = useJarvis((s) => s.conn)
   const weather = useJarvis((s) => s.weather)
   const settingsOpen = useJarvis((s) => s.settingsOpen)
+  const locked = useJarvis((s) => s.locked)
+  const enrolling = useFace((f) => f.mode === 'enroll' && f.phase !== 'off')
   const modeT = now() - since
   const inMap = mode === 'map'
   const online = conn === 'online'
@@ -455,7 +556,9 @@ export function Hud() {
         <Status mode={mode} modeT={modeT} />
       </div>
       <Subtitle mode={mode} modeT={modeT} />
-      {mode === 'face' && <FacePanels modeT={modeT} />}
+      {mode === 'face' && (demo ? <FacePanels modeT={modeT} /> : <LiveFacePanels />)}
+      {locked && !demo && <LockScreen />}
+      {enrolling && !locked && <button className="lock-alt cancel" onClick={cancelFace}>Cancelar cadastro</button>}
 
       {/* demonstração: cartões fictícios, sempre marcados DEMO */}
       <div className={`cards ${demo && inMap && modeT > 1.6 && modeT < 6.4 ? 'show' : ''}`}><DemoWeatherCard big /><DemoNewsCard /></div>
@@ -466,9 +569,11 @@ export function Hud() {
       <div className={`cards ${real && inMap ? 'show' : ''}`}><WeatherCard big data={weather} /><NewsCard /></div>
       {real && stage && <ToolLog />}
 
-      {inMap && <div className="mapnote">CENA DE MAPA 3D · <b className="demo">DEMONSTRAÇÃO</b> CIDADE FICTÍCIA — NÃO REPRESENTA {(useJarvis.getState().core?.location.city ?? 'Itumbiara').toUpperCase()}</div>}
-      {ui && <CommandBar />}
-      {ui && settingsOpen && <Settings />}
+      {inMap && (useJarvis.getState().cityMap && !demo
+        ? <div className="mapnote">{useJarvis.getState().cityMap!.city.toUpperCase()} · MAPA REAL · {useJarvis.getState().cityMap!.attribution.toUpperCase()} · PRÉDIOS SÓ ONDE MAPEADOS, ALTURA EXAGERADA</div>
+        : <div className="mapnote">CENA DE MAPA 3D · <b className="demo">DEMONSTRAÇÃO</b> CIDADE FICTÍCIA — NÃO REPRESENTA {(useJarvis.getState().core?.location.city ?? 'Itumbiara').toUpperCase()}</div>)}
+      {ui && !locked && <CommandBar />}
+      {ui && settingsOpen && !locked && <Settings />}
     </div>
   )
 }

@@ -17,7 +17,7 @@ const ROOFS = ['#c2553a', '#b84a32', '#cf6a48', '#a8442f', '#d47a58', '#bd5b3e']
 const LIGHTS = ['#e6e9ee', '#d5dae2', '#f2f2ee', '#c9d2dd']
 const GREYS = ['#8d98a8', '#77818f', '#9aa7b8', '#5f6874']
 
-const vert = /* glsl */ `
+export const vert = /* glsl */ `
   varying vec3 vCol; varying vec3 vN; varying vec3 vW; varying vec3 vL;
   void main(){
     vL = position;
@@ -30,6 +30,8 @@ const vert = /* glsl */ `
     #endif
     #ifdef USE_INSTANCING_COLOR
       vCol = instanceColor;
+    #elif defined(USE_COLOR)
+      vCol = color;
     #else
       vCol = vec3(1.);
     #endif
@@ -37,7 +39,7 @@ const vert = /* glsl */ `
     gl_Position = projectionMatrix * viewMatrix * w;
   }
 `
-const frag = /* glsl */ `
+export const frag = /* glsl */ `
   precision highp float;
   uniform vec3 uFogColor; uniform float uFog; uniform float uFlat; uniform vec3 uTintC;
   varying vec3 vCol; varying vec3 vN; varying vec3 vW; varying vec3 vL;
@@ -66,7 +68,7 @@ const frag = /* glsl */ `
  * uma avenida diagonal) para o estado "mapa 3D demonstrativo". Geometria original — não usa
  * tiles nem dados de mapas de terceiros.
  */
-export function City({ blocks }: { blocks: number }) {
+export function City({ blocks, hidden = false }: { blocks: number; hidden?: boolean }) {
   const group = useRef<THREE.Group>(null!)
   const ring = useRef<THREE.Mesh>(null!)
   const mats = useMemo(() => {
@@ -148,7 +150,7 @@ export function City({ blocks }: { blocks: number }) {
   }
 
   useFrame(() => {
-    group.current.visible = rig.mapT > 0.5
+    group.current.visible = rig.mapT > 0.5 && !hidden
     if (!group.current.visible) return
     // névoa mais densa durante a descida, como no trecho 18–22 s
     const fog = THREE.MathUtils.lerp(0.0048, 0.0022, rig.descend * rig.descend)

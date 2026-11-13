@@ -15,6 +15,8 @@ export const liveAudio = {
   micLevel: 0,
   speaking: false,
   subtitle: '',
+  /** turno (resposta) que está soando agora — a entrada usa para voar para a cidade na hora certa */
+  turn: '',
   progress: 0,
   errorUntil: 0,
 }
@@ -328,6 +330,51 @@ class AudioEngine {
     this.handlers.onSpeaking(false)
   }
 
+  // ------------------------------------------------------------------ música de entrada
+  private music: { src: AudioBufferSourceNode; gain: GainNode; volume: number; ducked: boolean | null; fading: boolean } | null = null
+
+  /** Toca a música escolhida pelo usuário, fora da cadeia da voz (o núcleo reage só à fala). */
+  async playMusic(data: ArrayBuffer, volume: number) {
+    const ctx = this.ensure()
+    if (ctx.state !== 'running') await ctx.resume().catch(() => undefined)
+    const buf = await ctx.decodeAudioData(data)
+    this.fadeMusic(0.2)
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    const gain = ctx.createGain()
+    gain.gain.value = 0
+    src.connect(gain)
+    gain.connect(ctx.destination)
+    src.start()
+    const m = { src, gain, volume, ducked: null as boolean | null, fading: false }
+    this.music = m
+    src.onended = () => { if (this.music === m) this.music = null; try { gain.disconnect() } catch { /* ok */ } }
+  }
+
+  get musicPlaying(): boolean { return !!this.music && !this.music.fading }
+
+  /** Some aos poucos e para. */
+  fadeMusic(seconds: number) {
+    const m = this.music
+    if (!m || !this.ctx || m.fading) return
+    m.fading = true
+    const t = this.ctx.currentTime
+    m.gain.gain.cancelScheduledValues(t)
+    m.gain.gain.setValueAtTime(m.gain.gain.value, t)
+    m.gain.gain.linearRampToValueAtTime(0, t + Math.max(0.05, seconds))
+    try { m.src.stop(t + Math.max(0.05, seconds) + 0.05) } catch { /* já parou */ }
+  }
+
+  /** Abaixa a música enquanto o JARVIS fala (chamado a cada frame). */
+  private duckMusic() {
+    const m = this.music
+    if (!m || m.fading || !this.ctx) return
+    const speaking = liveAudio.speaking
+    if (m.ducked === speaking) return
+    m.ducked = speaking
+    m.gain.gain.setTargetAtTime(m.volume * this.prefs.volume * (speaking ? 0.26 : 1), this.ctx.currentTime, speaking ? 0.12 : 0.6)
+  }
+
   // ------------------------------------------------------------------ microfone
   /** Abaixa a voz do JARVIS enquanto confere se a fala por cima é para ele. */
   duck(on: boolean) {
@@ -478,6 +525,7 @@ class AudioEngine {
 
   // ------------------------------------------------------------------ medição (chamado a cada frame)
   tick(dt: number) {
+    this.duckMusic()
     const now = performance.now() / 1000
     const t = this.ctx?.currentTime ?? 0
     if (this.ctx && liveAudio.speaking) {
@@ -489,6 +537,7 @@ class AudioEngine {
       for (const g of this.segs) if (g.start >= 0 && g.start <= t) cur = g
       if (cur) {
         liveAudio.subtitle = cur.text
+        liveAudio.turn = cur.turn
         const span = Math.max(0.05, cur.end - cur.start)
         liveAudio.progress = cur.open ? Math.min(0.97, (t - cur.start) / Math.max(span, (t - cur.start) + 0.4)) : Math.min(1, (t - cur.start) / span)
       }

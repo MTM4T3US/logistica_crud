@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .assistant import MAX_AUDIO_BYTES, VERSION, Assistant, Connection
@@ -23,6 +23,10 @@ from .security.permissions import LocalAuth
 from .voice.tts import TTSError
 
 OPEN_PATHS = {"/api/health", "/api/session"}
+#: com a entrada por rosto ativa e o JARVIS bloqueado, só isto responde
+LOCKED_PATHS = {"/api/state"}
+#: mensagens aceitas pelo WebSocket enquanto o JARVIS está bloqueado
+LOCKED_MESSAGES = {"face_verify", "pin_verify", "refresh", "face_enroll"}
 SYSTEM_PERIOD_S = 2.5
 WEATHER_PERIOD_S = 600.0
 
@@ -59,6 +63,8 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
             return Response(status_code=204, headers=cors(origin))
         if path not in OPEN_PATHS and not auth.token_ok(request.headers.get("x-jarvis-token")):
             return JSONResponse({"error": "token ausente ou inválido"}, status_code=401, headers=cors(origin))
+        if path not in OPEN_PATHS and path not in LOCKED_PATHS and not core.gate.open:
+            return JSONResponse({"error": "JARVIS bloqueado: confirme seu rosto (ou o PIN) para continuar."}, status_code=423, headers=cors(origin))
         response = await call_next(request)
         for key, value in cors(origin).items():
             response.headers[key] = value
@@ -137,6 +143,49 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
         except TTSError as err:
             raise HTTPException(status_code=503, detail={"code": err.code, "message": err.message}) from None
 
+    @app.get("/api/intro/music")
+    async def intro_music_get() -> FileResponse:
+        path = core.intro_music()
+        if path is None:
+            raise HTTPException(status_code=404, detail={"message": "Nenhuma música de entrada escolhida."})
+        return FileResponse(path, media_type=core.MUSIC_TYPES[path.suffix.lower()])
+
+    @app.post("/api/intro/music")
+    async def intro_music_put(request: Request) -> dict[str, Any]:
+        """Recebe o arquivo de música escolhido pelo usuário (fica só em backend/data/entrada/)."""
+        from urllib.parse import unquote
+
+        size = int(request.headers.get("content-length") or 0)
+        if size > core.MUSIC_MAX_BYTES:
+            raise HTTPException(status_code=413, detail={"message": "Arquivo maior que 40 MB."})
+        name = unquote(request.headers.get("x-file-name") or "musica.mp3")
+        try:
+            info = await asyncio.to_thread(core.save_intro_music, await request.body(), name)
+        except ValueError as err:
+            raise HTTPException(status_code=400, detail={"message": str(err)}) from None
+        return {"ok": True, **info}
+
+    @app.delete("/api/intro/music")
+    async def intro_music_delete() -> dict[str, Any]:
+        await asyncio.to_thread(core.delete_intro_music)
+        return {"ok": True}
+
+    @app.get("/api/map")
+    async def city_map(force: bool = False) -> Response:
+        """Mapa real da cidade (OpenStreetMap). A 1ª vez baixa da internet; depois vem do arquivo salvo."""
+        import json as _json
+
+        data = await core.citymap.get(force=force)
+        if not data.get("ok"):
+            raise HTTPException(status_code=503, detail={"message": data["error"]})
+        return Response(_json.dumps(data, separators=(",", ":")), media_type="application/json")
+
+    @app.get("/api/briefing")
+    async def briefing() -> dict[str, Any]:
+        return await core.briefing()
+
+    app.state.conns = 0
+
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:
         ok = auth.host_ok(ws.headers.get("host")) and auth.origin_ok(ws.headers.get("origin"), required=True) and auth.token_ok(ws.query_params.get("token"))
@@ -145,13 +194,39 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
             return
         await ws.accept()
         conn = Connection(ws)
+        core.gate.connection_opened(app.state.conns)
+        app.state.conns += 1
         await conn.send({"type": "hello", "version": VERSION, "state": await core.state()})
         feeder = asyncio.create_task(_feed(conn, core))
         try:
             while True:
                 msg = await ws.receive_json()
                 kind = msg.get("type") if isinstance(msg, dict) else None
-                if kind == "user_text":
+                if not core.gate.open and kind not in LOCKED_MESSAGES:
+                    await conn.send({"type": "locked", "message": "Confirme seu rosto (ou o PIN) para usar o JARVIS."})
+                    continue
+                if kind in ("face_verify", "pin_verify", "face_enroll", "face_enable", "face_forget"):
+                    gate = core.gate
+                    if kind == "face_verify":
+                        res = gate.verify(msg.get("descriptors"), msg.get("liveness") if isinstance(msg.get("liveness"), dict) else None)
+                    elif kind == "pin_verify":
+                        res = await asyncio.to_thread(gate.verify_pin, str(msg.get("pin", "")))
+                    elif kind == "face_enroll":
+                        res = await asyncio.to_thread(gate.enroll, msg.get("descriptors"), msg.get("pin"))
+                    elif kind == "face_enable":
+                        res = await asyncio.to_thread(gate.set_enabled, bool(msg.get("on")))
+                    else:
+                        res = await asyncio.to_thread(gate.forget)
+                    await conn.send({"type": "face_result", "mode": kind, **res.to_dict()})
+                    await conn.send({"type": "state", "state": await core.state()})
+                elif kind == "lock":
+                    await conn.cancel_turn()
+                    core.gate.lock()
+                    await conn.send({"type": "state", "state": await core.state()})
+                elif kind == "intro":
+                    await conn.cancel_turn()
+                    conn.turn = asyncio.create_task(core.intro(conn))
+                elif kind == "user_text":
                     text = str(msg.get("text", "")).strip()
                     if text:
                         await conn.cancel_turn()
@@ -192,6 +267,8 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
             conn.closed = True
             feeder.cancel()
             await conn.cancel_turn()
+            app.state.conns = max(0, app.state.conns - 1)
+            core.gate.connection_closed(app.state.conns)
 
     dist = PROJECT_DIR / "dist"
     if dist.is_dir():

@@ -36,9 +36,11 @@ export function Director() {
     // demonstração: o fim da fala roteirizada volta ao repouso (no modo real quem decide é o áudio)
     if (demo && m === 'speaking' && !s.sequence && rig.modeT > lineDuration(LINES[s.line] ?? LINES[0], 0.3) + 1.6) s.setMode('idle')
 
-    rig.scan = m === 'face' ? clamp01(rig.modeT / FACE_SCAN_SECONDS) : 0
+    // rosto: na demonstração segue o cronômetro; na entrada real, o resultado do núcleo
+    const liveFace = m === 'face' && !demo
+    rig.scan = m === 'face' ? (liveFace ? rig.faceScan : clamp01(rig.modeT / FACE_SCAN_SECONDS)) : 0
     rig.faceT = d(rig.faceT, m === 'face' ? 1 : 0, 2.6)
-    rig.confirmT = d(rig.confirmT, m === 'face' && rig.scan >= 1 ? 1 : 0, 5)
+    rig.confirmT = d(rig.confirmT, m === 'face' && (liveFace ? rig.faceOk : rig.scan >= 1) ? 1 : 0, 5)
     // o núcleo continua reduzido no topo enquanto a cidade ainda está na tela (subida de volta ao palco)
     rig.miniT = d(rig.miniT, m === 'face' || m === 'map' || rig.mapT > 0.5 ? 1 : 0, 3.2)
     rig.listenT = d(rig.listenT, m === 'listening' ? 1 : 0, 4)

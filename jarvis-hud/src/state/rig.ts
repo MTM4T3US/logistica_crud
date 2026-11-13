@@ -33,6 +33,13 @@ export const rig = {
   /** 0 = visão alta e enevoada do mapa, 1 = órbita oblíqua sobre a cidade */
   descend: 1,
   snapped: false,
+  /** malha do rosto AO VIVO (468×3, unidades da cena) vinda da câmera; null = rosto genérico */
+  faceLive: null as Float32Array | null,
+  /** quando faceLive foi atualizada (rig.t) — dados velhos voltam ao rosto genérico */
+  faceLiveAt: -1,
+  /** entrada real: progresso 0..1 e confirmação vinda do núcleo */
+  faceScan: 0,
+  faceOk: false,
 }
 
 export const damp = (cur: number, target: number, lambda: number, dt: number) =>

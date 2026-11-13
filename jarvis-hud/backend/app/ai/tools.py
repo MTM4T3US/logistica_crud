@@ -84,11 +84,13 @@ class ToolRegistry:
     def __init__(
         self, *, settings: Settings, perms: Permissions, monitor: SystemMonitor, controller: SystemController,
         devices: DeviceRegistry, weather: WeatherService, news: NewsService, memory: MemoryStore,
-        memory_enabled: Callable[[], bool],
+        memory_enabled: Callable[[], bool], briefing: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+        lock: Callable[[], bool] | None = None, map_status: Callable[[], dict[str, Any]] | None = None,
     ):
         self.settings, self.perms, self.monitor, self.controller = settings, perms, monitor, controller
         self.devices, self.weather, self.news, self.memory = devices, weather, news, memory
         self.memory_enabled = memory_enabled
+        self._briefing, self._lock, self._map_status = briefing, lock, map_status
 
     # ------------------------------------------------------------------ catálogo
     def specs(self) -> dict[str, ToolSpec]:
@@ -99,8 +101,12 @@ class ToolRegistry:
             ToolSpec("get_system_status", "Estado do computador", "Leitura real de CPU, memória RAM, discos, bateria, GPU e tempo ligado deste computador.", _obj(), ActionClass.READ, self._system),
             ToolSpec("get_news", "Notícias", "Manchetes da fonte de notícias configurada pelo usuário. Devolve erro se não houver fonte.", _obj(), ActionClass.READ, self._news),
             ToolSpec("list_capabilities", "Capacidades", "Lista o que está autorizado: aplicativos, pastas, rotinas, dispositivos e recursos disponíveis neste sistema.", _obj(), ActionClass.READ, self._capabilities),
-            ToolSpec("show_map", "Mapa no HUD", "Mostra a cena de mapa 3D no HUD. Atenção: é uma cidade fictícia de demonstração, não um mapa real.", _obj(), ActionClass.SAFE, self._show_map),
+            ToolSpec("show_map", "Mapa no HUD", "Mostra a cena de mapa 3D da cidade no HUD (mapa real do OpenStreetMap quando já baixado; senão, cidade fictícia de demonstração — o resultado diz qual).", _obj(), ActionClass.SAFE, self._show_map),
         ]
+        if self._briefing:
+            specs.append(ToolSpec("city_briefing", "Resumo da cidade", "Clima e manchetes reais da cidade agora, em texto pronto, e mostra o mapa. Use para 'novidades', 'resumo do dia'.", _obj(), ActionClass.READ, self._city_briefing))
+        if self._lock:
+            specs.append(ToolSpec("lock_hud", "Bloquear o JARVIS", "Bloqueia o HUD: para voltar, o usuário confirma o rosto ou o PIN. Só bloqueia; desbloquear nunca é possível por voz ou IA.", _obj(), ActionClass.SAFE, self._lock_hud))
         if p.process_list:
             specs.append(ToolSpec(
                 "list_processes", "Processos", "Processos que mais usam CPU ou memória agora.",
@@ -240,7 +246,21 @@ class ToolRegistry:
 
     async def _show_map(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
         await run.notify({"type": "ui", "action": "show_map"})
-        return ToolOutcome(run.call, True, True, "Cena de mapa aberta no HUD (cidade fictícia de demonstração, não é um mapa real).", data={"demo_scene": True, "real_map": False})
+        st = self._map_status() if self._map_status else {"ready": False}
+        if st.get("ready"):
+            return ToolOutcome(run.call, True, True, f"Mapa real de {st['city']} aberto no HUD ({st['attribution']}).", data={"demo_scene": False, "real_map": True})
+        return ToolOutcome(run.call, True, True, "Cena de mapa aberta no HUD. O mapa real ainda não foi baixado: por enquanto é a cidade fictícia de demonstração.", data={"demo_scene": True, "real_map": False})
+
+    async def _city_briefing(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
+        b = await self._briefing()  # type: ignore[misc]
+        await run.notify({"type": "ui", "action": "show_map", "briefing": b})
+        return ToolOutcome(run.call, True, True, b["briefing"], data={"weather": b["weather"], "headlines": b["headlines"]})
+
+    async def _lock_hud(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
+        if not self._lock():  # type: ignore[misc]
+            return ToolOutcome(run.call, False, False, "Não há rosto cadastrado: cadastre em Configurações → Entrada por rosto para poder bloquear.")
+        await run.notify({"type": "ui", "action": "locked"})
+        return ToolOutcome(run.call, True, True, "JARVIS bloqueado. Para voltar: rosto ou PIN.")
 
     async def _get_volume(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
         return self._from_action(run.call, await asyncio.to_thread(self.controller.get_volume))

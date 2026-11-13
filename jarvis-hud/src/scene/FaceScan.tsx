@@ -1,171 +1,125 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
-import { rig } from '../state/rig'
+import { damp, rig } from '../state/rig'
+import { FACE_CANON, FACE_CONTOUR, FACE_EDGES, FACE_FEATURE } from './faceMesh'
 
 /*
- * Máscara facial frontal (rosto genérico — não representa ninguém).
- * Só a superfície da frente é gerada: uma esfera inteira deixava a nuca aparecer através do
- * rosto e o conjunto lia como "ovo". Aqui o rosto é um campo de altura z(x, y) sobre um
- * contorno em escudo, com relevo de testa, órbitas, nariz, maçãs, lábios e queixo.
+ * Rosto holográfico sobre a malha canônica do MediaPipe Face Mesh (468 pontos, 898 triângulos).
+ * Sem câmera, mostra o rosto genérico (que não representa ninguém). Com a entrada por rosto ativa,
+ * os mesmos 468 pontos passam a seguir o rosto real captado no próprio computador (rig.faceLive).
  */
-const Y_TOP = 1.08
-const Y_CHIN = -1.25
+type Built = { base: Float32Array; big: Float32Array; mids: Uint16Array; lines: Uint16Array }
 
-/** Meia-largura do contorno do rosto na altura y. */
-function halfWidth(y: number) {
-  if (y >= 0) return 0.8 * Math.pow(Math.max(0, 1 - Math.pow(y / Y_TOP, 2)), 0.42)
-  const t = Math.min(1, -y / -Y_CHIN)
-  return 0.8 * (1 - 0.1 * t - 0.75 * t * t * t)
+/** Pontos = vértices (+ meio de cada aresta, na qualidade alta). Linhas = arestas da malha. */
+function build(points: number): Built {
+  const n = FACE_CANON.length / 3
+  // meio das arestas só onde a malha é larga: nos olhos e lábios ela já é densa (e estourava o brilho)
+  const keep: number[] = []
+  if (points >= 500)
+    for (let e = 0; e < FACE_EDGES.length / 2; e++) {
+      const a = FACE_EDGES[e * 2] * 3, c = FACE_EDGES[e * 2 + 1] * 3
+      const len = Math.hypot(FACE_CANON[a] - FACE_CANON[c], FACE_CANON[a + 1] - FACE_CANON[c + 1], FACE_CANON[a + 2] - FACE_CANON[c + 2])
+      if (len > 0.075) keep.push(FACE_EDGES[e * 2], FACE_EDGES[e * 2 + 1])
+    }
+  const mids = new Uint16Array(keep)
+  const total = n + mids.length / 2
+  const big = new Float32Array(total)
+  for (let i = 0; i < n; i++) big[i] = FACE_FEATURE[i]
+  // linhas: malha completa + contornos (repetidos uma vez: ficam mais brilhantes por soma aditiva)
+  const lines = new Uint16Array(FACE_EDGES.length + FACE_CONTOUR.length)
+  lines.set(FACE_EDGES)
+  lines.set(FACE_CONTOUR, FACE_EDGES.length)
+  return { base: FACE_CANON, big, mids, lines }
 }
 
-const g = (v: number, c: number, w: number) => Math.exp(-Math.pow((v - c) / w, 2))
-
-/** Relevo do rosto: profundidade z para um ponto (x, y) dentro do contorno. */
-function depth(x: number, y: number) {
-  const w = Math.max(0.05, halfWidth(y))
-  const u = Math.min(1, Math.abs(x) / w)
-  const ax = Math.abs(x)
-  // curvatura geral (lateral e vertical)
-  let z = 0.62 * Math.sqrt(Math.max(0, 1 - Math.pow(u * 0.96, 2.2))) * (1 - 0.22 * Math.pow(y / 1.25, 2))
-  // nariz: dorso que cresce da ponte até a ponta + asas
-  const ridge = Math.min(1, Math.max(0, (0.34 - y) / 0.56))
-  const below = y < -0.24 ? Math.exp(-Math.pow((y + 0.24) / 0.07, 2)) : 1
-  z += 0.3 * g(x, 0, 0.085 + 0.05 * ridge) * ridge * ridge * below
-  z += 0.09 * g(ax, 0.13, 0.07) * g(y, -0.24, 0.07)
-  // órbitas afundadas e arco das sobrancelhas
-  z -= 0.11 * g(ax, 0.34, 0.16) * g(y, 0.17, 0.1)
-  z += 0.06 * g(y, 0.37, 0.07) * (1 - 0.6 * g(x, 0, 0.1)) * (1 - u * u)
-  // maçãs do rosto
-  z += 0.06 * g(ax, 0.47, 0.17) * g(y, -0.12, 0.2)
-  // lábios (com vinco entre eles) e queixo
-  z += 0.075 * g(x, 0, 0.24) * (g(y, -0.5, 0.05) + g(y, -0.62, 0.055))
-  z -= 0.03 * g(x, 0, 0.2) * g(y, -0.56, 0.02)
-  z -= 0.03 * g(x, 0, 0.25) * g(y, -0.76, 0.06)
-  z += 0.07 * g(x, 0, 0.22) * g(y, -0.98, 0.13)
-  return z - 0.3
-}
-
-const P = (x: number, y: number, lift = 0): [number, number, number] => [x, y, depth(x, y) + lift]
-
-function build(n: number) {
-  const pts: number[] = []
-  const big: number[] = []
-  const lines: number[] = []
-  const seg = (a: number[], b: number[]) => lines.push(a[0], a[1], a[2], b[0], b[1], b[2])
-
-  // malha triangulada: fileiras horizontais defasadas (como uma malha de rastreamento facial)
-  const rows = Math.max(14, Math.round(Math.sqrt(n) * 1.05))
-  const dy = (Y_TOP - Y_CHIN) / rows
-  let prevRow: [number, number, number][] = []
-  for (let r = 0; r <= rows; r++) {
-    const y = Y_TOP - 0.03 - r * dy * 0.985
-    const w = halfWidth(y) * 0.96
-    const m = Math.max(1, Math.round((2 * w) / (dy * 1.12)))
-    const row: [number, number, number][] = []
-    for (let i = 0; i <= m; i++) {
-      const fx = m === 0 ? 0 : i / m
-      const x = -w + 2 * w * fx + (r % 2 ? 0.5 : 0) * ((2 * w) / Math.max(1, m)) * (i < m ? 1 : 0) * 0.5
-      const p = P(Math.max(-w, Math.min(w, x)), y)
-      row.push(p)
-      pts.push(...p); big.push(0)
-      if (i > 0) seg(row[i - 1], p)
-    }
-    // liga cada ponto aos dois mais próximos da fileira anterior
-    for (const p of row) {
-      const near = prevRow
-        .map((q) => [Math.hypot(q[0] - p[0], q[1] - p[1]), q] as const)
-        .sort((a, b) => a[0] - b[0])
-        .slice(0, 2)
-      for (const [, q] of near) seg(p, q)
-    }
-    prevRow = row
+/** Escreve os pontos e as linhas a partir dos 468 vértices atuais. */
+function writeMesh(v: Float32Array, b: Built, pts: Float32Array, seg: Float32Array) {
+  pts.set(v)
+  const n = v.length / 3
+  for (let e = 0; e < b.mids.length / 2; e++) {
+    const a = b.mids[e * 2] * 3, c = b.mids[e * 2 + 1] * 3, o = (n + e) * 3
+    pts[o] = (v[a] + v[c]) / 2; pts[o + 1] = (v[a + 1] + v[c + 1]) / 2; pts[o + 2] = (v[a + 2] + v[c + 2]) / 2
   }
-
-  // polilinhas de destaque: pontos maiores e mais brilhantes
-  const poly = (f: (t: number) => [number, number], steps: number, closed = false, lift = 0.012) => {
-    const list: [number, number, number][] = []
-    for (let i = 0; i <= steps - (closed ? 1 : 0); i++) {
-      const [X, Y] = f(i / steps)
-      const p = P(X, Y, lift)
-      list.push(p)
-      pts.push(...p); big.push(1)
-      if (i > 0) seg(list[i - 1], p)
-    }
-    if (closed) seg(list[list.length - 1], list[0])
+  for (let e = 0; e < b.lines.length / 2; e++) {
+    const a = b.lines[e * 2] * 3, c = b.lines[e * 2 + 1] * 3, o = e * 6
+    seg[o] = v[a]; seg[o + 1] = v[a + 1]; seg[o + 2] = v[a + 2]
+    seg[o + 3] = v[c]; seg[o + 4] = v[c + 1]; seg[o + 5] = v[c + 2]
   }
-  // contorno do rosto (o "escudo" pontilhado da referência)
-  poly((t) => {
-    const y = Y_TOP - t * (Y_TOP - Y_CHIN)
-    return [halfWidth(y), y]
-  }, 26)
-  poly((t) => {
-    const y = Y_TOP - t * (Y_TOP - Y_CHIN)
-    return [-halfWidth(y), y]
-  }, 26)
-  for (const sgn of [-1, 1]) {
-    // olho amendoado: pálpebra superior mais arqueada que a inferior
-    poly((t) => {
-      const a = t * Math.PI * 2
-      const up = Math.sin(a) > 0
-      return [sgn * (0.34 + Math.cos(a) * 0.15), 0.17 + Math.sin(a) * (up ? 0.07 : 0.04)]
-    }, 12, true)
-    poly((t) => [sgn * (0.34 + Math.cos(t * Math.PI * 2) * 0.04), 0.175 + Math.sin(t * Math.PI * 2) * 0.04], 5, true) // íris
-    poly((t) => [sgn * (0.16 + t * 0.4), 0.34 + Math.sin(t * Math.PI * 0.85) * 0.06 - t * 0.02], 6) // sobrancelha
-    poly((t) => [sgn * (0.05 + t * 0.09), -0.05 - t * 0.2], 3) // lateral do nariz
-    poly((t) => [sgn * (0.5 - t * 0.14), -0.2 - t * 0.5], 4) // sulco da face
-  }
-  poly((t) => [0, 0.3 - t * 0.5], 6) // dorso do nariz
-  poly((t) => [(t - 0.5) * 0.3, -0.27 - Math.sin(t * Math.PI) * 0.025], 5) // base do nariz
-  poly((t) => [(t - 0.5) * 0.56, -0.56 + Math.sin(t * Math.PI) * 0.075 - 0.02 * Math.sin(t * Math.PI * 2) ** 2], 9) // lábio superior
-  poly((t) => [(t - 0.5) * 0.56, -0.56 - Math.sin(t * Math.PI) * 0.09], 9) // lábio inferior
-  poly((t) => [(t - 0.5) * 0.56, -0.56], 5) // linha da boca
-  return { pts: new Float32Array(pts), big: new Float32Array(big), lines: new Float32Array(lines) }
 }
 
 const vert = /* glsl */ `
   attribute float aBig;
+  attribute float aSeed;
   uniform float uTime; uniform float uScanY; uniform float uPx; uniform float uShow;
   varying float vA; varying float vScan;
   void main(){
     vec3 p = position;
     // montagem: os pontos convergem de fora para dentro
-    float h = fract(sin(dot(position, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float h = aSeed;
     float k = smoothstep(h * .6, h * .6 + .4, uShow);
     p *= mix(1.9, 1., k);
     vec4 w = modelMatrix * vec4(p, 1.);
     vScan = exp(-pow((position.y - uScanY) * 5.5, 2.));
-    vA = k * (.55 + .45 * sin(uTime * 3. + h * 40.)) * (1. + .9 * aBig);
+    vA = k * (.55 + .45 * sin(uTime * 3. + h * 40.)) * (1. + .35 * aBig);
     vec4 mv = viewMatrix * w;
-    gl_PointSize = (34. + 30. * h + 34. * aBig + 60. * vScan) * uPx / -mv.z;
+    gl_PointSize = (24. + 20. * h + 8. * aBig + 46. * vScan) * uPx / -mv.z;
     gl_Position = projectionMatrix * mv;
   }
 `
 
-/** Máscara facial em pontos + malha triangulada, com faixa de varredura. Demonstração visual apenas. */
+/** Rosto em pontos + malha triangulada, com faixa de varredura. Segue o rosto real quando há câmera. */
 export function FaceScan({ points }: { points: number }) {
   const group = useRef<THREE.Group>(null!)
   const pm = useRef<THREE.ShaderMaterial>(null!)
   const lm = useRef<THREE.ShaderMaterial>(null!)
   const plane = useRef<THREE.Mesh>(null!)
-  const { pGeo, lGeo } = useMemo(() => {
-    const { pts, big, lines } = build(points)
+  const { pGeo, lGeo, built, cur } = useMemo(() => {
+    const built = build(points)
+    const cur = new Float32Array(built.base)
+    const pts = new Float32Array(built.big.length * 3)
+    const seg = new Float32Array(built.lines.length * 3)
+    writeMesh(cur, built, pts, seg)
     const pGeo = new THREE.BufferGeometry()
-    pGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3))
-    pGeo.setAttribute('aBig', new THREE.BufferAttribute(big, 1))
+    pGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3).setUsage(THREE.DynamicDrawUsage))
+    pGeo.setAttribute('aBig', new THREE.BufferAttribute(built.big, 1))
+    // semente fixa por ponto (a posição muda quando o rosto real se move)
+    const seed = new Float32Array(built.big.length).map((_, i) => (Math.sin(i * 12.9898) * 43758.5453) % 1)
+    pGeo.setAttribute('aSeed', new THREE.BufferAttribute(seed.map(Math.abs), 1))
     const lGeo = new THREE.BufferGeometry()
-    lGeo.setAttribute('position', new THREE.BufferAttribute(lines, 3))
-    return { pGeo, lGeo }
+    lGeo.setAttribute('position', new THREE.BufferAttribute(seg, 3).setUsage(THREE.DynamicDrawUsage))
+    lGeo.setAttribute('aSeed', new THREE.BufferAttribute(new Float32Array(built.lines.length).map((_, i) => Math.abs((Math.sin(i * 7.13) * 9631.7) % 1)), 1))
+    pGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 2.5)
+    lGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 2.5)
+    return { pGeo, lGeo, built, cur }
   }, [points])
+  const live = useRef(0)
   const mk = () => ({ uTime: { value: 0 }, uScanY: { value: 0 }, uPx: { value: 1 }, uShow: { value: 0 }, uTint: { value: 0 }, uGlow: { value: 1 } })
   const uniforms = useMemo(mk, [])
   const uniformsL = useMemo(mk, [])
-  useFrame(({ gl }) => {
+  useFrame(({ gl }, dt) => {
     const g = group.current
     g.visible = rig.faceT > 0.01
     if (!g.visible) return
-    g.rotation.y = Math.sin(rig.t * 0.5) * 0.34
-    g.rotation.x = -0.04 + Math.sin(rig.t * 0.37) * 0.05
+    // rosto ao vivo (câmera) ou genérico: transição suave entre os dois
+    const fresh = rig.faceLive && rig.t - rig.faceLiveAt < 0.6
+    live.current = damp(live.current, fresh ? 1 : 0, 6, dt)
+    const target = fresh ? rig.faceLive! : built.base
+    const k = 1 - Math.exp(-(fresh ? 18 : 4) * dt)
+    let moved = false
+    for (let i = 0; i < cur.length; i++) {
+      const d = target[i] - cur[i]
+      if (Math.abs(d) > 1e-4) { cur[i] += d * k; moved = true }
+    }
+    if (moved) {
+      writeMesh(cur, built, pGeo.attributes.position.array as Float32Array, lGeo.attributes.position.array as Float32Array)
+      pGeo.attributes.position.needsUpdate = true
+      lGeo.attributes.position.needsUpdate = true
+    }
+    // sem câmera, o rosto genérico gira devagar; ao vivo, a pose vem do próprio rosto
+    const sway = 1 - live.current
+    g.rotation.y = Math.sin(rig.t * 0.5) * 0.34 * sway
+    g.rotation.x = (-0.04 + Math.sin(rig.t * 0.37) * 0.05) * sway
     const scanY = Math.sin(rig.t * 1.7) * 1.1 - 0.1
     for (const m of [pm.current, lm.current]) {
       const u = m.uniforms
@@ -181,7 +135,7 @@ export function FaceScan({ points }: { points: number }) {
   })
   const color = /* glsl */ `vec3 base = mix(vec3(.3, .75, 1.45), vec3(.2, 1.45, .85), uTint);`
   return (
-    <group ref={group} position={[0, 3.62, 0]} scale={[1.5, 1.36, 1.36]} visible={false}>
+    <group ref={group} position={[0, 3.62, 0]} scale={[1.28, 1.28, 1.28]} visible={false}>
       <points geometry={pGeo}>
         <shaderMaterial
           ref={pm}

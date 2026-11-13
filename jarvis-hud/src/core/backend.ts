@@ -3,7 +3,8 @@
  * O HUD nunca vê a chave da IA: fala apenas com 127.0.0.1, via token de sessão.
  */
 import { audio } from './audio'
-import { handleEvent, useJarvis, type CoreState } from '../state/jarvis'
+import { faceCam, useFace } from './face'
+import { bridge, handleEvent, startIntro, useJarvis, type CoreState } from '../state/jarvis'
 import { useStore } from '../state/store'
 
 let token = ''
@@ -64,6 +65,21 @@ export function startBackend() {
   started = true
   restoreMute()
   audio.on({ onUtterance: (wav, mode) => send({ type: 'user_audio', wav, mode }) })
+  bridge.send = send
+  bridge.fetchMusic = async () => {
+    const resp = await fetch('/api/intro/music', { headers: { 'X-Jarvis-Token': token } })
+    return resp.ok ? resp.arrayBuffer() : null
+  }
+  bridge.fetchMap = async () => {
+    const resp = await fetch('/api/map', { headers: { 'X-Jarvis-Token': token } })
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}))
+      useJarvis.setState({ notice: { message: body?.detail?.message ?? 'Mapa real indisponível; mostrando a cidade de demonstração.', ts: Date.now() } })
+      return null
+    }
+    return resp.json()
+  }
+  faceCam.configure(send)
   void connect()
 }
 
@@ -144,4 +160,62 @@ export async function playSample(engine: string, voice: string, style?: string):
   audio.enqueue({ turn: 'amostra', seq: 0, text: res.text, wav: res.wav, duration: res.duration })
   audio.speechDone('amostra')
   return { cached: res.cached, duration: res.duration }
+}
+
+// ------------------------------------------------------------------ entrada por rosto
+const requireBlink = () => useJarvis.getState().core?.face?.liveness !== 'desligado'
+
+/** Botão "Iniciar" da tela de bloqueio: o clique também libera o áudio (música e voz). */
+export function startFaceCheck() {
+  audio.unlock()
+  void faceCam.start('verify', { requireBlink: requireBlink() })
+}
+
+export function sendPin(pin: string): boolean {
+  audio.unlock()
+  return send({ type: 'pin_verify', pin })
+}
+
+/** Cadastro: mesma câmera, 6 capturas com o rosto em ângulos levemente diferentes. */
+export function enrollFace(pin: string) {
+  audio.unlock()
+  useJarvis.setState({ settingsOpen: false })
+  useStore.getState().setLive('face')
+  void faceCam.start('enroll', {
+    requireBlink: true, pin,
+    onDone: () => window.setTimeout(() => { if (useStore.getState().mode === 'face') useStore.getState().setLive('idle') }, 2200),
+  })
+}
+
+export function cancelFace() {
+  faceCam.stop()
+  if (!useJarvis.getState().locked && useStore.getState().mode === 'face') useStore.getState().setLive('idle')
+}
+
+export const faceEnable = (on: boolean) => send({ type: 'face_enable', on })
+export const faceForget = () => send({ type: 'face_forget' })
+export const lockNow = () => { audio.stop(); audio.fadeMusic(0.5); useFace.setState({ phase: 'off' }); return send({ type: 'lock' }) }
+
+/** Música de entrada: o arquivo do próprio usuário vai só para backend/data/entrada/. */
+export async function uploadMusic(file: File) {
+  const resp = await fetch('/api/intro/music', {
+    method: 'POST', body: file,
+    headers: { 'X-Jarvis-Token': token, 'X-File-Name': encodeURIComponent(file.name), 'Content-Type': 'application/octet-stream' },
+  })
+  const body = await resp.json().catch(() => ({}))
+  if (!resp.ok) throw new Error(body?.detail?.message || body?.error || `HTTP ${resp.status}`)
+  refresh()
+  return body as { name: string; bytes: number }
+}
+
+export async function deleteMusic() {
+  await api('/api/intro/music', { method: 'DELETE' })
+  refresh()
+}
+
+/** Ensaia a entrada sem bloquear (botão nas Configurações). */
+export function testIntro() {
+  audio.unlock()
+  useJarvis.setState({ settingsOpen: false })
+  void startIntro()
 }

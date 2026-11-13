@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# modelos de rosto copiados de node_modules/@vladmandic/human no build
+public/models/
 # Kit de referência (frames de vídeo de terceiros): uso privado, não versionar
 reference/
 evidence/comparativos/

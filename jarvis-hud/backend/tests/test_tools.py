@@ -133,7 +133,7 @@ async def test_unavailable_sources_are_reported_not_invented(settings, perms):
     weather = await reg.execute(call("get_weather"), yes, quiet)
     assert weather.ok is False and weather.executed is False and "temperature_c" not in weather.data
     news = await reg.execute(call("get_news"), yes, quiet)
-    assert news.ok is False and news.data == {"items": []} and "Nenhuma fonte" in news.summary
+    assert news.ok is False and news.data == {"items": []} and "desligadas" in news.summary
 
 
 async def test_devices_flagged_simulated_and_lock_refused(settings, perms):
