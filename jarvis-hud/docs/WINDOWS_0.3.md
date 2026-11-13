@@ -1,4 +1,4 @@
-# JARVIS OS 0.3 no Windows — instalação e uso
+# JARVIS OS 0.3/0.4 no Windows — instalação e uso
 
 ## Requisitos
 
@@ -26,6 +26,11 @@
    `JARVIS_LEDS=bluetooth` e `JARVIS_LED_ADDRESS=` (endereço mostrado pelo diagnóstico; no PC de teste
    era `BE:27:53:00:BC:1B`). A antiga ponte `led_bridge.py` não é necessária — se estiver aberta, feche-a.
 7. **`VALIDAR_GEMINI.bat`** (opcional, gasta cota) — testa a IA, gera amostras de voz e mede latência.
+8. **0.4 — mapa real:** `cd backend` e `.venv\Scripts\python scripts\baixar_mapa.py` (uma vez; o núcleo
+   também baixa sozinho na primeira entrada).
+9. **0.4 — entrada:** Configurações → ENTRADA POR ROSTO (PIN + cadastro) e MÚSICA DE ENTRADA (arquivo seu).
+   Atualizando da 0.3: descompacte por cima e rode o `INICIAR.bat` — ele instala a biblioteca de rosto
+   uma vez. Mantenha `backend\.env`, `backend\config\permissions.json` e `backend\data\`.
 
 ## Usar
 
@@ -51,3 +56,7 @@
 | Fita não encontrada | Ligue a fita, feche o app do celular, aproxime o PC, rode `DIAGNOSTICO.bat --ble`. |
 | Interrupções falsas pelo eco | Use fone, ou desligue "Interromper a resposta" em Configurações → Microfone. |
 | Sem voz | Configurações → VOZ → Mecanismo: "Piper" ou "Voz local"; confira o volume do Windows. |
+| Câmera bloqueada / "câmera em uso" | Libere no cadeado da barra de endereço; feche outros programas que usam a webcam. Use o PIN. |
+| Rosto recusado sendo você | Melhore a luz de frente; cadastre de novo; veja a correspondência (%) e, se preciso, baixe `JARVIS_FACE_THRESHOLD` um pouco. |
+| Sem música na entrada | O navegador só toca som depois de um clique: use o botão "Iniciar reconhecimento". |
+| Mapa "cidade fictícia" | O mapa real ainda não foi baixado (sem internet?). Rode `scripts\baixar_mapa.py`. |

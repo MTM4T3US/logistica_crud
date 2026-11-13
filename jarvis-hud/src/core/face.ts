@@ -28,10 +28,12 @@ interface FaceUi {
   live: number | null
   stream: MediaStream | null
   retryAt: number
+  /** leituras do rosto por segundo neste PC (diagnóstico) */
+  rate: number
 }
 
 export const useFace = create<FaceUi>(() => ({
-  phase: 'off', mode: 'verify', message: '', similarity: null, found: false, blinked: false, progress: 0, real: null, live: null, stream: null, retryAt: 0,
+  phase: 'off', mode: 'verify', message: '', similarity: null, found: false, blinked: false, progress: 0, real: null, live: null, stream: null, retryAt: 0, rate: 0,
 }))
 
 const set = (p: Partial<FaceUi>) => useFace.setState(p)
@@ -215,6 +217,7 @@ class FaceCam {
         const at = performance.now() / 1000
         if (this.lastFrameAt) this.frameDt += (at - this.lastFrameAt - this.frameDt) * 0.3
         this.lastFrameAt = at
+        set({ rate: Math.round(10 / Math.max(0.01, this.frameDt)) / 10 })
         if (DEBUG) {
           const w = window as unknown as { __faceStats?: { calls: number; ms: number; score: number; faces: number } }
           const st = w.__faceStats ?? { calls: 0, ms: 0, score: 0, faces: 0 }

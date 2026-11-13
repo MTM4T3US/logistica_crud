@@ -94,7 +94,7 @@ export function RealCity({ data }: { data: CityData }) {
       uniforms: { uFogColor: { value: new THREE.Color(0.2, 0.36, 0.82) }, uFog: { value: 0.0022 }, uFlat: { value: 1 }, uTintC: { value: new THREE.Color(tint) } },
       vertexShader: vert, fragmentShader: frag, toneMapped: false, vertexColors: true,
     })
-    const glow = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+    const glow = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
     return { ground: mk('#2a2f38'), solid: mk('#ffffff'), glow }
   }, [])
   const geo = useMemo(() => {

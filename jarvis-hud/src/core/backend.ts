@@ -70,14 +70,12 @@ export function startBackend() {
     const resp = await fetch('/api/intro/music', { headers: { 'X-Jarvis-Token': token } })
     return resp.ok ? resp.arrayBuffer() : null
   }
-  bridge.fetchMap = async () => {
-    const resp = await fetch('/api/map', { headers: { 'X-Jarvis-Token': token } })
-    if (!resp.ok) {
-      const body = await resp.json().catch(() => ({}))
-      useJarvis.setState({ notice: { message: body?.detail?.message ?? 'Mapa real indisponível; mostrando a cidade de demonstração.', ts: Date.now() } })
-      return null
-    }
-    return resp.json()
+  bridge.fetchMap = async (quiet) => {
+    const resp = await fetch('/api/map', { headers: { 'X-Jarvis-Token': token } }).catch(() => null)
+    const body = resp?.ok ? await resp.json().catch(() => null) : null
+    if (body?.ok) return body
+    if (!quiet) useJarvis.setState({ notice: { message: body?.error ?? 'Mapa real indisponível; mostrando a cidade de demonstração.', ts: Date.now() } })
+    return null
   }
   faceCam.configure(send)
   void connect()

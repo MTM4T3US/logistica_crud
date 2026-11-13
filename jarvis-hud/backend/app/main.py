@@ -175,9 +175,8 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
         """Mapa real da cidade (OpenStreetMap). A 1ª vez baixa da internet; depois vem do arquivo salvo."""
         import json as _json
 
+        # sem mapa (ex.: sem internet) responde {"ok": false, "error": …}: é um estado esperado, não uma falha do núcleo
         data = await core.citymap.get(force=force)
-        if not data.get("ok"):
-            raise HTTPException(status_code=503, detail={"message": data["error"]})
         return Response(_json.dumps(data, separators=(",", ":")), media_type="application/json")
 
     @app.get("/api/briefing")

@@ -109,3 +109,11 @@ implementado. Caminho investigado:
   "microfone ativo" ligado por hardware ao microfone.
 - O núcleo já aceita trechos de áudio WAV com os modos `wake`/`followup`/`barge`; a caixinha usaria o
   mesmo protocolo por um canal dedicado (a implementar).
+
+
+## Atualização 0.4
+
+- **Mapa real:** feito com OpenStreetMap (`backend/app/services/citymap.py`). Os próximos passos possíveis
+  são relevo (dados de elevação) e rótulos de bairros.
+- **Câmera:** usada só na entrada por rosto, no próprio navegador, com consentimento (botão "Iniciar
+  reconhecimento"). A caixinha JARVIS e o robô continuam sem câmera.

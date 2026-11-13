@@ -1,16 +1,18 @@
-# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.3
+# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.4
 
 > Cole TUDO abaixo da linha em uma sessão do Claude Code (app Claude Desktop ou terminal) aberta
-> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.3.zip`
+> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.4.zip`
+> (se a 0.3 já estava instalada: descompacte por cima, mantendo `backend\.env`, `backend\config\permissions.json` e `backend\data\`)
 > (ou clonou o branch `ccr-41dc01f1-0wlbjp` do repositório MTM4T3US/logistica_crud — a pasta é `jarvis-hud`).
 > Antes de colar: crie `jarvis-hud\backend\.env` a partir de `.env.example` e cole **você mesmo** a
 > chave Gemini na linha `GEMINI_API_KEY=` — não cole a chave no chat.
 
 ---
 
-Você é o engenheiro de testes do JARVIS OS 0.3 neste computador Windows. O código foi escrito e
-testado em Linux na nuvem (157 testes automatizados, navegador headless), mas **nada foi executado
-neste PC ainda**. Sua missão: instalar, executar, testar com o hardware real, corrigir o que for
+Você é o engenheiro de testes do JARVIS OS 0.4 neste computador Windows. O código foi escrito e
+testado em Linux na nuvem (testes automatizados, navegador headless com câmera falsa), mas **nada foi
+executado neste PC ainda**. Se uma sessão anterior já testou a 0.3 aqui, reaproveite o relatório dela e
+foque nas fases novas (9 a 12), repetindo só o que a atualização pode ter afetado. Sua missão: instalar, executar, testar com o hardware real, corrigir o que for
 simples e relatar com honestidade.
 
 ## Regras
@@ -142,13 +144,53 @@ Para cada falha, relate a mensagem exibida.
 4. Se a ponte antiga `led_bridge.py` estiver rodando, avise o usuário: ela não é mais necessária e
    ocupa a fita (uma conexão por vez). Não a encerre sem perguntar.
 
+## FASE 9 — Entrada por rosto (0.4)
+
+**Peça autorização ao usuário antes de ligar a câmera.** Nada é gravado: só números (descritores) vão
+para `backend\data\rosto.json`. Não fotografe o usuário nem salve quadros da câmera.
+
+1. Configurações → ENTRADA POR ROSTO: o usuário digita um PIN reserva e clica "Cadastrar meu rosto".
+   Ele pisca uma vez e vira o rosto de leve (6 capturas). Anote o tempo total e as "LEITURAS/S NESTE PC"
+   mostradas no painel da direita. Confirme que o holograma do rosto acompanha o rosto real dele.
+2. "Bloquear agora" → tela "IDENTIFICAÇÃO NECESSÁRIA" → "Iniciar reconhecimento". Ele olha e pisca.
+   Meça o tempo até entrar e anote a CORRESPONDÊNCIA (%) mostrada. Repita 5 vezes (luz normal, luz fraca,
+   de óculos/boné se ele usar) e anote cada valor.
+3. Recusas esperadas (anote a correspondência de cada uma):
+   - uma foto do usuário no celular, parada (não pode entrar: não pisca);
+   - **com o consentimento dela**, outra pessoa da casa olhando e piscando (não pode entrar);
+   - um vídeo do usuário piscando no celular — **limitação conhecida**: pode entrar; relate o que acontecer.
+4. Com os números, sugira o `JARVIS_FACE_THRESHOLD` (padrão 0,62): acima dos valores de outras pessoas e
+   abaixo dos do usuário. Não mude sem mostrar os números a ele. Anote também ANTI-FOTO e VIDA (%): se
+   separarem bem foto de rosto real, proponha `JARVIS_FACE_ANTISPOOF_MIN`.
+5. PIN reserva: entre com o PIN; erre 5 vezes e confirme a pausa de 30 s.
+6. Feche o navegador por mais de 2 min e abra de novo: deve pedir o rosto. Recarregar (F5) não deve pedir.
+7. Confirme que a luz da webcam APAGA depois da entrada.
+
+## FASE 10 — Música e sequência de entrada
+
+1. O usuário escolhe, em Configurações → MÚSICA DE ENTRADA, um arquivo de música **dele** (ex.: a faixa que
+   ele comprou/baixou legalmente). Não baixe música da internet.
+2. "Testar a entrada agora": a música começa, depois de ~5 s o JARVIS dá as boas-vindas, voa para a cidade
+   e fala clima e notícias; a música abaixa enquanto ele fala e some no fim. Relate o volume, o momento da
+   fala e se o corte ficou bom. Ajuste os controles (volume, atraso da voz) com o usuário.
+3. Faça a entrada completa: bloquear → rosto → música → boas-vindas → cidade.
+
+## FASE 11 — Mapa real e resumo
+
+1. `cd backend` e `.venv\Scripts\python scripts\baixar_mapa.py`: anote ruas/prédios/rio baixados.
+2. "Jarvis, mostra o mapa": a nota no rodapé deve dizer MAPA REAL · OPENSTREETMAP. Pergunte ao usuário se
+   ele reconhece as ruas de Itumbiara (avenidas, rio Paranaíba). Capture a tela.
+3. "Quais as novidades": clima real e manchetes reais (confira 2 links). Nada pode ser inventado.
+4. "Bloqueia o Jarvis": deve bloquear; nenhum comando de voz desbloqueia.
+
 ## Entrega
 
-Crie `jarvis-hud\docs\RELATORIO_WINDOWS_0.3.md` com:
+Crie `jarvis-hud\docs\RELATORIO_WINDOWS_0.4.md` com:
 
 1. Tabela por item: Fase · Teste · Status (REAL-OK / REAL-FALHOU / SÓ-API / SIMULADO / NÃO-TESTADO) · Evidência.
 2. Problemas encontrados e correções aplicadas (arquivo e motivo).
-3. Desempenho medido (copie os relatórios).
+3. Desempenho medido (copie os relatórios), incluindo leituras/s do rosto e tempo até entrar.
+   Tabela da entrada por rosto: tentativa · pessoa/objeto · correspondência % · anti-foto % · entrou?
 4. O que ficou pendente e por quê.
 
 Depois mostre o relatório ao usuário. Se o repositório estiver configurado neste PC, faça um commit

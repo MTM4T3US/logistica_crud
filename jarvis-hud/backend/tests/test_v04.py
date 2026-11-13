@@ -186,7 +186,7 @@ def test_briefing_uses_only_real_data_and_says_when_a_source_failed():
     assert b["briefing"].endswith("Em que posso ajudar, senhor?") and len(b["headlines"]) == 3
     bad = compose(now, "Itumbiara", "senhor", {"ok": False}, {"enabled": True, "sections": [{"label": "Itumbiara", "items": [], "error": "x"}, {"label": "Brasil", "items": [], "error": None}]})
     assert "Não consegui o clima de Itumbiara agora." in bad["briefing"] and "Não consegui ler as notícias de Itumbiara" in bad["briefing"]
-    assert "Não encontrei notícias recentes de Brasil." in bad["briefing"] and bad["weather"] is None and bad["headlines"] == []
+    assert "Não encontrei notícias recentes do Brasil." in bad["briefing"] and bad["weather"] is None and bad["headlines"] == []
     assert "notícias" not in compose(now, "Itumbiara", "senhor", weather, {"enabled": False})["briefing"].lower()
 
 
@@ -330,3 +330,42 @@ def test_city_map_converts_openstreetmap_to_local_meters_and_caches(tmp_path):
 
     bad = asyncio.run(offline())
     assert bad["ok"] is False and "OpenStreetMap" in bad["error"]
+
+
+# ---------------------------------------------------------------- comandos locais da 0.4
+@pytest.mark.parametrize("text,tool", [
+    ("Jarvis, mostra o mapa", "show_map"), ("abre o mapa da cidade", "show_map"),
+    ("quais as novidades", "city_briefing"), ("Jarvis, como está a cidade?", "city_briefing"), ("me dá as notícias", "city_briefing"),
+    ("bloqueia o jarvis", "lock_hud"), ("Jarvis, trava a tela", "lock_hud"),
+])
+def test_router_handles_map_news_and_lock_without_gemini(text, tool):
+    from app.router import LocalRouter
+    from app.security.permissions import Permissions
+
+    names = {"show_map", "city_briefing", "lock_hud", "get_weather", "get_time", "control_device", "set_lights"}
+    plan = LocalRouter(Permissions(), lambda: names).match(text)
+    assert plan is not None and [c.name for c in plan.calls] == [tool]
+
+
+def test_locking_by_voice_works_but_nothing_unlocks_by_voice(settings, perms):
+    from app.router import LocalRouter
+
+    core = Assistant(settings, gemini=None, memory=MemoryStore(":memory:"), perms=perms, controller=FakeController(), devices=DeviceRegistry(),
+                     weather=WeatherService(settings.location, enabled=False))
+    names = set(core.tools.specs())
+    assert {"lock_hud", "city_briefing", "show_map"} <= names and not any("unlock" in n for n in names)
+    plan = LocalRouter(perms, lambda: names).match("tranca a porta")
+    assert plan is None or "lock_hud" not in [c.name for c in plan.calls]     # porta ≠ JARVIS
+    assert core._lock_from_tool() is False                                     # sem rosto cadastrado não bloqueia
+    core.gate.enroll([ME, near(ME, 0.5), near(ME, 0.5, 3)], "4321")
+    assert core._lock_from_tool() is True and not core.gate.open
+
+
+def test_map_route_reports_missing_map_without_an_http_error(client, monkeypatch):
+    async def offline(force=False):
+        return {"ok": False, "error": "Não consegui baixar o mapa de Itumbiara do OpenStreetMap (ConnectError)."}
+
+    monkeypatch.setattr(client.core.citymap, "get", offline)
+    r = client.get("/api/map", headers=auth())
+    assert r.status_code == 200 and r.json()["ok"] is False and "OpenStreetMap" in r.json()["error"]
+    assert client.get("/api/state", headers=auth()).json()["map"] == {"ready": False, "city": "Itumbiara"}

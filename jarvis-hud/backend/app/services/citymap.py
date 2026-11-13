@@ -22,6 +22,7 @@ ATTRIBUTION = "© colaboradores do OpenStreetMap (ODbL)"
 MAX_AGE_S = 60 * 86400
 MAX_BUILDINGS = 30000
 MAX_BYTES = 80_000_000
+RETRY_S = 600.0
 
 ROAD_CLASS = {
     "motorway": 0, "trunk": 0, "primary": 0, "motorway_link": 0, "trunk_link": 0, "primary_link": 0,
@@ -160,6 +161,7 @@ class CityMap:
         self.folder, self.city, self.lat, self.lon, self.radius, self.url = folder, city, lat, lon, radius_m, overpass_url
         self._client = client
         self._mem: dict[str, Any] | None = None
+        self._failed: tuple[float, str] | None = None   # sem internet: não tenta de novo a cada pedido
         slug = re.sub(r"[^a-z0-9]+", "-", city.lower()).strip("-") or "cidade"
         self.path = folder / f"{slug}-{radius_m}m.json"
 
@@ -183,6 +185,8 @@ class CityMap:
         data = self.cached()
         if data and not force and time.time() - data.get("fetched_at", 0) < MAX_AGE_S:
             return {"ok": True, **data}
+        if not force and not data and self._failed and time.time() - self._failed[0] < RETRY_S:
+            return {"ok": False, "error": self._failed[1]}
         client = self._client or httpx.AsyncClient(timeout=120.0, follow_redirects=True)
         try:
             resp = await client.post(self.url, data={"data": overpass_query(self.lat, self.lon, self.radius)},
@@ -194,7 +198,8 @@ class CityMap:
         except (httpx.HTTPError, ValueError) as exc:
             if data:   # sem internet: usa o mapa antigo e avisa
                 return {"ok": True, "stale": True, **data}
-            return {"ok": False, "error": f"Não consegui baixar o mapa de {self.city} do OpenStreetMap ({type(exc).__name__})."}
+            self._failed = (time.time(), f"Não consegui baixar o mapa de {self.city} do OpenStreetMap ({type(exc).__name__}). Tento de novo em alguns minutos.")
+            return {"ok": False, "error": self._failed[1]}
         finally:
             if self._client is None:
                 await client.aclose()

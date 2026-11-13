@@ -42,7 +42,7 @@ def test_health_is_open_but_everything_else_needs_the_token(client):
     assert client.get("/api/state", headers=HOST).status_code == 401
     assert client.get("/api/state", headers={**HOST, "x-jarvis-token": "errado"}).status_code == 401
     state = client.get("/api/state", headers=auth()).json()
-    assert state["version"] == "0.3.0" and state["ai"]["configured"] is False and state["location"]["city"] == "Itumbiara"
+    assert state["version"] == "0.4.0" and state["ai"]["configured"] is False and state["location"]["city"] == "Itumbiara"
     # o estado público não carrega o token de sessão nem qualquer valor de chave
     assert "token-de-teste" not in str(state)
     assert not any("key" in k.lower() or "token" in k.lower() for k in _keys(state))
@@ -110,7 +110,7 @@ def test_websocket_conversation_runs_real_tools(client):
         ws.send_json({"type": "user_audio", "wav": "@@@não-é-base64@@@"})
         assert read_until(ws, "error")[-1]["code"] == "bad_audio"
         ws.send_json({"type": "refresh"})
-        assert read_until(ws, "state")[-1]["state"]["version"] == "0.3.0"
+        assert read_until(ws, "state")[-1]["state"]["version"] == "0.4.0"
     actions = client.get("/api/actions", headers=auth()).json()["actions"]
     assert [a["tool"] for a in actions] == ["get_system_status", "open_app"] and all(a["executed"] for a in actions)
     history = client.get("/api/history", headers=auth()).json()["messages"]

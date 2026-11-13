@@ -43,6 +43,10 @@ def _weather_text(city: str, w: dict[str, Any] | None) -> str:
     return out
 
 
+def _de(label: str) -> str:
+    return "do Brasil" if label == "Brasil" else f"de {label}"
+
+
 def _news_text(news: dict[str, Any] | None, city: str) -> tuple[str, list[dict[str, Any]]]:
     if not news or not news.get("enabled"):
         return "", []
@@ -52,11 +56,11 @@ def _news_text(news: dict[str, Any] | None, city: str) -> tuple[str, list[dict[s
     for sec in sections:
         label = sec.get("label") or "Notícias"
         if sec.get("error"):
-            parts.append(f"Não consegui ler as notícias de {label} agora.")
+            parts.append(f"Não consegui ler as notícias {_de(label)} agora.")
             continue
         items = sec.get("items") or []
         if not items:
-            parts.append(f"Não encontrei notícias recentes de {label}.")
+            parts.append(f"Não encontrei notícias recentes {_de(label)}.")
             continue
         take = items[:2] if label == city else items[:1]
         used.extend(take)

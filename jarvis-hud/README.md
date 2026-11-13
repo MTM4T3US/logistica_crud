@@ -1,4 +1,4 @@
-# JARVIS OS 0.3
+# JARVIS OS 0.4
 
 Assistente pessoal com interface holográfica: um HUD em React + Three.js e um núcleo local em
 Python (FastAPI) que conversa pelo Google Gemini, fala, ouve e consulta dados reais do
@@ -6,11 +6,10 @@ computador e de Itumbiara-GO.
 
 Esta pasta é independente do CRUD de logística que está na raiz do repositório.
 
-> **Estado (0.3):** escrita e testada em Linux na nuvem (157 testes, navegador 14/14, detecção local
-> de "Jarvis" com fala real). **Ainda não foi executada no Windows**, com microfone físico, nem com a
-> fita de LED real. O roteiro para testar no seu PC está em
-> [`docs/PROMPT_TESTE_WINDOWS.md`](docs/PROMPT_TESTE_WINDOWS.md); status por item em
-> [`docs/RELATORIO_0.3.md`](docs/RELATORIO_0.3.md); instalação em [`docs/WINDOWS_0.3.md`](docs/WINDOWS_0.3.md).
+> **Estado (0.4):** escrita e testada em Linux na nuvem (testes automáticos do núcleo, navegador com
+> câmera falsa). **Ainda não foi executada no Windows**, com a sua webcam, o seu microfone nem a fita de LED
+> real. Roteiro de teste no PC: [`docs/PROMPT_TESTE_WINDOWS.md`](docs/PROMPT_TESTE_WINDOWS.md); o que é real,
+> simulado ou pendente: [`docs/RELATORIO_0.4.md`](docs/RELATORIO_0.4.md) e [`docs/RELATORIO_0.3.md`](docs/RELATORIO_0.3.md).
 
 ## O que é real e o que é simulado
 
@@ -25,9 +24,10 @@ Esta pasta é independente do CRUD de logística que está na raiz do repositór
 | Abrir apps/pastas/projetos, volume, mídia, janelas, rotinas | Windows, só para itens de `backend/config/permissions.json` (não testado em Windows ainda). |
 | LEDs | Driver real ELK-BLEDDM por Bluetooth (`JARVIS_LEDS=bluetooth`) ou simulador (padrão). Não testado com a fita ainda. |
 | Persiana, fechadura, robô | **Simuladores.** Nenhum hardware é acionado. |
-| Reconhecimento facial | **Demonstração visual.** Nenhuma câmera é usada. |
-| Mapa 3D | **Cidade fictícia de demonstração**, identificada na tela. |
-| Notícias | Desligadas até você configurar um feed RSS. |
+| Entrada por rosto | Real, no navegador: câmera local, malha de 468 pontos, piscar, descritor comparado pelo núcleo; PIN reserva. Nenhuma imagem é gravada. Na demonstração (teclas 1–6) continua encenada e marcada DEMO. |
+| Música de entrada | Arquivo do próprio usuário, guardado só no PC; abaixa sob a voz. |
+| Mapa 3D | Itumbiara real (OpenStreetMap, baixado uma vez e guardado no PC). Sem o mapa baixado: cidade fictícia, identificada na tela. |
+| Notícias | Google Notícias de Itumbiara e do Brasil (feeds RSS, sem inventar manchetes). `JARVIS_NEWS_FEEDS=off` desliga. |
 
 ## Iniciar no Windows
 
@@ -74,6 +74,18 @@ npm run dev
 Sem o núcleo rodando, o HUD abre do mesmo jeito em modo demonstração.
 </details>
 
+## Entrada (0.4)
+
+1. Configurações → **ENTRADA POR ROSTO**: defina um PIN reserva e clique **Cadastrar meu rosto** (pisque uma
+   vez e vire o rosto de leve).
+2. Configurações → **MÚSICA DE ENTRADA**: escolha um arquivo de música seu.
+3. Ao abrir o JARVIS: **Iniciar reconhecimento** → olhe e pisque → música → boas-vindas → a câmera voa
+   para Itumbiara e ele fala o clima e as notícias.
+4. Para bloquear: "Jarvis, bloqueia o Jarvis" ou o botão nas Configurações. Desbloquear é só com rosto ou PIN.
+
+A entrada por rosto protege o JARVIS de quem senta no seu computador; não substitui a senha do Windows
+e nunca serve para a fechadura.
+
 ## Usar
 
 - **Texto:** digite na barra inferior e pressione Enter.
@@ -114,7 +126,7 @@ dedicada em *Configurações → Sistema → Tela → Elementos gráficos* para 
 ## Testes
 
 ```powershell
-# backend — 157 testes, sem rede nem chave
+# backend — sem rede nem chave
 backend\.venv\Scripts\python -m pip install -r backend\requirements-dev.txt
 cd backend; .venv\Scripts\python -m pytest; cd ..
 
@@ -134,7 +146,7 @@ VALIDAR_GEMINI.bat
 ```
 backend/app/            núcleo: main, assistant, ai/, voice/, system/, services/, devices/, memory/, security/
 backend/config/         permissions.example.json (lista de apps, pastas e rotinas autorizados)
-backend/scripts/        validar_gemini.py · diagnostico.py · baixar_modelos.py · teste_led.py
+backend/scripts/        validar_gemini.py · diagnostico.py · baixar_modelos.py · teste_led.py · baixar_mapa.py
 backend/tests/          testes automatizados
 src/scene/              cena 3D (Core, Platform, Space, Canopy, City, FaceScan, Director)
 src/core/               audio.ts (reprodução, microfone, níveis) · backend.ts (sessão e WebSocket)
@@ -147,6 +159,7 @@ evidence/               capturas da 0.1, 0.2 e 0.2.1; amostras de voz em evidenc
 
 ## Documentação
 
+- [`docs/RELATORIO_0.4.md`](docs/RELATORIO_0.4.md) — entrada por rosto, música, resumo e mapa reais: o que foi testado e como.
 - [`docs/RELATORIO_0.3.md`](docs/RELATORIO_0.3.md) — o que a 0.3 fez, status por item (real, só API, dublê, simulado, pendente).
 - [`docs/WINDOWS_0.3.md`](docs/WINDOWS_0.3.md) — instalação e uso no Windows; [`docs/PROMPT_TESTE_WINDOWS.md`](docs/PROMPT_TESTE_WINDOWS.md) — roteiro de teste no PC.
 - [`docs/RELATORIO_0.2.1.md`](docs/RELATORIO_0.2.1.md) — testes reais, problemas corrigidos, cotas, pendências da 0.3.
@@ -159,5 +172,8 @@ evidence/               capturas da 0.1, 0.2 e 0.2.1; amostras de voz em evidenc
 
 ## Licenças e atribuições
 
-Tudo na cena é gerado por código. Fontes: Orbitron e Rajdhani (SIL OFL). Dados meteorológicos:
+Tudo na cena é gerado por código. Malha do rosto: modelo canônico do MediaPipe Face Mesh (Google,
+Apache 2.0). Reconhecimento facial: [Human](https://github.com/vladmandic/human) (MIT) e os modelos que
+ele inclui. Mapa: © colaboradores do [OpenStreetMap](https://www.openstreetmap.org/copyright) (ODbL).
+Notícias: Google Notícias (RSS). Fontes: Orbitron e Rajdhani (SIL OFL). Dados meteorológicos:
 [Open-Meteo](https://open-meteo.com) (CC BY 4.0), gratuito para uso não comercial.

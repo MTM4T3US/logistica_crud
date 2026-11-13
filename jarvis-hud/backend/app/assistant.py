@@ -36,7 +36,7 @@ from .voice.wake import WakeDetector, make_wake_detector
 from .router import LocalRouter
 from .voice.tts import STYLES, GeminiTTS, LocalTTS, PiperTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 MAX_TOOL_ROUNDS = 6
 CONFIRM_TIMEOUT_S = 45.0
 MAX_AUDIO_BYTES = 8 * 1024 * 1024

@@ -243,3 +243,11 @@ html, body, #root, .app { margin: 0; width: 100%; height: 100%; background: #010
 .settings label.file { position: relative; display: inline-flex; flex-direction: row; margin: 0; border: 1px solid rgba(80, 170, 255, .5); background: rgba(40, 120, 255, .16); color: #dcefff; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
 .settings label.file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .settings label.file:focus-within { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* 0.4: mapa real — cartões nas laterais e legenda no centro, sem se sobrepor */
+.hud.live.mode-map .card.big.card-weather { width: 25vw; top: 30%; }
+.hud.live.mode-map .card-news { width: 25vw; }
+.subtitle.map.live { width: 44vw; max-width: 44vw; font-size: calc(var(--u) * 2.7); top: 33%; }
+.subtitle.map.live.long { font-size: calc(var(--u) * 2.15); }
+.face-info .kicker.dim { margin: calc(var(--u) * .6) 0; }
+.subtitle.map.live { background: radial-gradient(ellipse at center, rgba(1, 6, 24, .62), rgba(1, 6, 24, 0) 72%); padding: calc(var(--u) * 1.4) calc(var(--u) * 2.4); }

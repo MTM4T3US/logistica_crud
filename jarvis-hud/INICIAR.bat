@@ -12,8 +12,9 @@ if not errorlevel 1 set PY=py -3
 %PY% --version >nul 2>nul
 if errorlevel 1 goto sempython
 
-if exist node_modules goto build
-echo [1/4] Instalando dependencias do HUD. Isso acontece so na primeira vez...
+rem 0.4: a biblioteca de rosto e nova; quem ja tinha a 0.3 instala de novo uma vez
+if exist node_modules\@vladmandic\human\package.json goto build
+echo [1/4] Instalando dependencias do HUD. Isso acontece na primeira vez e ao atualizar...
 call npm install
 if errorlevel 1 goto erro
 :build

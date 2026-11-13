@@ -93,16 +93,16 @@ export const useJarvis = create<JarvisState>((set) => ({
 export const bridge = {
   send: (_msg: Record<string, unknown>) => false as boolean,
   fetchMusic: async (): Promise<ArrayBuffer | null> => null,
-  fetchMap: async (): Promise<CityData | null> => null,
+  fetchMap: async (_quiet: boolean): Promise<CityData | null> => null,
 }
 
 let mapLoading = false
 /** Carrega o mapa real (a 1ª vez o núcleo baixa do OpenStreetMap; depois vem do arquivo salvo). */
-export async function loadCityMap() {
+export async function loadCityMap(quiet = false) {
   if (mapLoading || J().cityMap || J().locked) return
   mapLoading = true
   try {
-    const data = await bridge.fetchMap()
+    const data = await bridge.fetchMap(quiet)
     if (data) useJarvis.setState({ cityMap: data })
   } finally {
     mapLoading = false
@@ -206,7 +206,8 @@ export function handleEvent(ev: Record<string, any>) {
       const was = J().locked
       useJarvis.setState({ core: ev.state, devices: ev.state.devices, conn: 'online', locked })
       audio.bargeIn = ev.state.runtime?.barge_in ?? true
-      if (!locked && ev.state.map?.ready) void loadCityMap()
+      // já liberado: carrega (ou baixa, 1ª vez) o mapa real em segundo plano, sem avisos se falhar
+      if (!locked) void loadCityMap(true)
       if (locked && !was) {
         // bloqueado: cena do rosto até a confirmação
         rig.faceOk = false

@@ -140,7 +140,7 @@ function Subtitle({ mode, modeT }: { mode: Mode; modeT: number }) {
   const city = useJarvis((s) => s.core?.location.city) ?? 'Itumbiara'
   if (!demo && mode === 'face') return <LiveFaceSubtitle />
   if (!demo) {
-    if (liveAudio.subtitle) return <div className={`subtitle ${mode === 'map' ? 'map' : ''}`}><LiveWords text={liveAudio.subtitle} progress={liveAudio.progress} city={city} /></div>
+    if (liveAudio.subtitle) return <div className={`subtitle ${mode === 'map' ? 'map live' : ''} ${liveAudio.subtitle.length > 150 ? 'long' : ''}`}><LiveWords text={liveAudio.subtitle} progress={liveAudio.progress} city={city} /></div>
     if (mode === 'listening') return <div className="subtitle soft">Ouvindo…</div>
     return null
   }
@@ -354,6 +354,7 @@ function LiveFacePanels() {
         <div className="bar"><span style={{ width: `${f.mode === 'enroll' ? f.progress * 100 : pct ?? 0}%` }} />{f.mode === 'verify' && <i className="mark" style={{ left: `${threshold * 100}%` }} />}</div>
         <ul>{steps.map(([label, on]) => <li key={label} className={on ? 'on' : ''}><i />{label}</li>)}</ul>
         {f.real !== null && <div className="kicker dim">ANTI-FOTO {Math.round(f.real * 100)}% · VIDA {f.live !== null ? Math.round(f.live * 100) : '–'}%</div>}
+        {f.stream && f.rate > 0 && <div className="kicker dim">{f.rate} LEITURAS/S NESTE PC</div>}
         <div className="face-btn">{ok ? 'CONFIRMADO' : f.phase === 'checking' ? 'CONFERINDO…' : f.phase === 'cooldown' ? 'AGUARDE' : 'EM VERIFICAÇÃO'}</div>
       </div>
     </div>
@@ -572,7 +573,7 @@ export function Hud() {
       {inMap && (useJarvis.getState().cityMap && !demo
         ? <div className="mapnote">{useJarvis.getState().cityMap!.city.toUpperCase()} · MAPA REAL · {useJarvis.getState().cityMap!.attribution.toUpperCase()} · PRÉDIOS SÓ ONDE MAPEADOS, ALTURA EXAGERADA</div>
         : <div className="mapnote">CENA DE MAPA 3D · <b className="demo">DEMONSTRAÇÃO</b> CIDADE FICTÍCIA — NÃO REPRESENTA {(useJarvis.getState().core?.location.city ?? 'Itumbiara').toUpperCase()}</div>)}
-      {ui && !locked && <CommandBar />}
+      {ui && !locked && !enrolling && <CommandBar />}
       {ui && settingsOpen && !locked && <Settings />}
     </div>
   )
