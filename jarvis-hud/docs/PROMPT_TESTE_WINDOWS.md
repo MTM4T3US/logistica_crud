@@ -226,9 +226,40 @@ o JARVIS disse:
 3. No JARVIS: "apaga as luzes", "acende a luz da sala", "luz do quarto em azul", "luzes a 30%". O JARVIS
    diz "confirmado pelos aparelhos"; confirme olhando. Tire uma lâmpada da tomada e veja a mensagem.
 
-## FASE 16 — Fechadura
+## FASE 16 — Fechadura do TCC (ESP32 + solenoide 12 V)
 
-Só se o firmware já estiver pronto (ver `docs\FECHADURA.md`). Caso contrário, anote NÃO-TESTADO.
+Leia `docs\FECHADURA.md` antes. **Regras extras:**
+- **Faça uma cópia da pasta do firmware** antes de mexer em qualquer coisa.
+- **Antes de gravar no ESP32,** mostre o diff ao usuário e peça autorização.
+- **Nunca implemente** uma rota de destrancar pela rede.
+- **Não acione a abertura da fechadura pelo painel do Render nem pelo app.**
+
+1. **Encontrar o firmware:** pergunte ao usuário onde está a pasta do firmware (o `.ino` ou o
+   `src/main.cpp`) e com o que ele grava (Arduino IDE ou PlatformIO). Leia como o código abre a porta
+   hoje: teclado, comandos do app/backend, rosto.
+2. **Copiar o módulo:** coloque `firmware\fechadura_jarvis\JarvisLock.h` e `jarvis_proto.h` na pasta do
+   sketch e crie `secrets.h` a partir de `secrets.example.h`.
+3. **Encaixar no código dele,** como em `exemplo_integracao.ino`:
+   - `begin` no `setup` e `loop` no `loop`;
+   - no ponto que abre a porta: recusar app/rosto/painel com `lockdown()` ligado e registrar com
+     `logEvent(origem, true)`;
+   - `logEvent("teclado", false)` em código errado;
+   - `setLockdown(false)` atrás do código mestre.
+
+   Se o código usa `delay()` na abertura, troque pelo temporizador do exemplo. Explique cada mudança.
+4. **Conectar à rede:** coloque o ESP32 no Wi-Fi de casa, com IP fixo no roteador (pergunte ao usuário), e
+   rode `backend\.venv\Scripts\python backend\scripts\parear_fechadura.py http://IP:8080`. O segredo vai
+   para o `secrets.h`; não mostre o segredo em relatórios.
+5. **Compilar e gravar:** compile primeiro e corrija só erros de compilação. Grave somente com a
+   autorização do usuário.
+6. **Testar com a fechadura,** confirmando com o usuário, olhando:
+   - "a porta está trancada?";
+   - abrir pelo teclado: o JARVIS deve ver o evento;
+   - "tranca a porta" durante uma abertura;
+   - "ativa o modo trancado": o app e o rosto **não** abrem, o teclado abre; depois desligue com o código mestre;
+   - 3 códigos errados: alerta;
+   - "destranca a porta": recusa.
+7. **Confirmar o que continua igual:** o app do TCC e o painel seguem funcionando fora do modo trancado.
 
 ## Entrega
 

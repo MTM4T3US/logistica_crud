@@ -1,9 +1,11 @@
 """Fechadura do próprio usuário (feita por ele) — lado do JARVIS. Escolha do usuário: SÓ TRANCAR E VER.
 
-O firmware da fechadura expõe na rede de casa apenas:
-    GET  /status   → {"locked": bool, "door_open": bool|null, "battery": int|null, "event": str|null}
-    POST /lock     → tranca (só se a porta estiver fechada) e devolve o mesmo formato
-Não existe /unlock na rede: destrancar continua no próprio aparelho (teclado, digital, RFID, chave).
+O firmware da fechadura (módulo firmware/fechadura_jarvis/JarvisLock.h, ESP32 + solenoide 12 V) expõe:
+    GET  /status   → {"locked", "energized", "door_open" (null sem sensor), "lockdown", "wrong_codes", "events": [...]}
+    POST /lock     → corta o solenoide se estiver abrindo ("garante travada")
+    POST /lockdown → MODO TRANCADO: app/rosto/painel não abrem mais; o teclado continua abrindo.
+                     Desligar o modo trancado só no teclado (código mestre), nunca pela rede.
+Não existe /unlock na rede: destrancar continua no próprio aparelho (teclado, app do TCC, rosto).
 
 Cada pedido e cada resposta é assinado (HMAC-SHA256) com um segredo gerado no pareamento:
     assinatura do pedido   = HMAC(segredo, "MÉTODO\\ncaminho\\ntimestamp\\nnonce\\ncorpo")
@@ -47,12 +49,13 @@ def new_config(url: str) -> dict[str, Any]:
 class OwnLock(Device):
     id, name, kind, transport = "fechadura", "Fechadura", "lock", "Wi-Fi local (assinado)"
     simulated = False
-    actions = ("status", "lock")          # "unlock" não existe aqui — de propósito
+    actions = ("status", "lock", "lockdown")   # "unlock" não existe aqui — de propósito
 
     def __init__(self, url: str, secret: bytes, client: httpx.AsyncClient | None = None, clock: Callable[[], float] = time.time):
         self.url, self.secret = url.rstrip("/"), secret
         self._client, self._clock = client, clock
-        self._s: dict[str, Any] = {"locked": None, "door_open": None, "battery": None, "reachable": None}
+        self._s: dict[str, Any] = {"locked": None, "door_open": None, "battery": None, "reachable": None, "lockdown": None, "wrong_codes": 0}
+        self.events: list[dict[str, Any]] = []
 
     def status(self) -> dict[str, Any]:
         return dict(self._s)
@@ -82,8 +85,11 @@ class OwnLock(Device):
         if action == "unlock":
             return DeviceResult(False, False, "Destrancar pelo JARVIS não existe: use o teclado, a digital ou a chave da própria fechadura.",
                                 simulated=False, state=self.status())
+        path = {"status": "/status", "lock": "/lock", "lockdown": "/lockdown"}.get(action)
+        if path is None:
+            return DeviceResult(False, False, f"Ação '{action}' não existe para a fechadura.", simulated=False, state=self.status())
         try:
-            data = await self._request("GET" if action == "status" else "POST", "/status" if action == "status" else "/lock")
+            data = await self._request("GET" if action == "status" else "POST", path)
         except PermissionError:
             self._s["reachable"] = False
             return DeviceResult(False, False, "A resposta da fechadura não veio assinada: ignorei (pode ser outro aparelho fingindo ser ela).",
@@ -91,13 +97,23 @@ class OwnLock(Device):
         except Exception as exc:
             self._s["reachable"] = False
             return DeviceResult(False, False, f"A fechadura não respondeu ({type(exc).__name__}). Está ligada e no Wi-Fi?", simulated=False, state=self.status())
-        self._s.update(locked=bool(data.get("locked")), door_open=data.get("door_open"), battery=data.get("battery"), reachable=True)
-        door = " A porta está ABERTA." if data.get("door_open") else ""
+        self._s.update(locked=bool(data.get("locked")), door_open=data.get("door_open"), battery=data.get("battery"), reachable=True,
+                       lockdown=bool(data.get("lockdown")), wrong_codes=int(data.get("wrong_codes") or 0), energized=bool(data.get("energized")))
+        self.events = list(data.get("events") or [])
+        bolt = "travada" if data.get("locked") else "ABRINDO (solenoide energizado)"
+        door = ("A porta está ABERTA." if data.get("door_open") else "Porta fechada.") if data.get("door_open") is not None else \
+            "Sem sensor de porta: não sei se ela está fechada."
+        mode = " Modo trancado ligado: app e rosto não abrem; só o teclado." if data.get("lockdown") else ""
         if action == "lock":
             if data.get("locked"):
-                return DeviceResult(True, True, "Porta trancada (confirmado pelo sensor da fechadura)." + door, simulated=False, state={**self.status(), "confirmed": True})
-            why = data.get("event") or ("a porta está aberta" if data.get("door_open") else "motivo não informado")
-            return DeviceResult(False, False, f"A fechadura não trancou: {why}.", simulated=False, state=self.status())
-        state = "trancada" if data.get("locked") else "DESTRANCADA"
-        bat = f" Bateria {data['battery']}%." if isinstance(data.get("battery"), int) else ""
-        return DeviceResult(True, True, f"Fechadura {state}.{door}{bat}", simulated=False, state=self.status())
+                return DeviceResult(True, True, f"Fechadura travada (o próprio circuito confirmou o solenoide desligado). {door}{mode}",
+                                    simulated=False, state={**self.status(), "confirmed": True})
+            return DeviceResult(False, False, f"A fechadura não travou ({data.get('event') or 'motivo não informado'}).", simulated=False, state=self.status())
+        if action == "lockdown":
+            if data.get("lockdown"):
+                return DeviceResult(True, True, "Modo trancado ligado: o app, o reconhecimento facial e o painel não abrem mais a porta; o teclado "
+                                    "continua abrindo. Para desligar o modo, use o código mestre no teclado.", simulated=False,
+                                    state={**self.status(), "confirmed": True})
+            return DeviceResult(False, False, "A fechadura não confirmou o modo trancado.", simulated=False, state=self.status())
+        bad = f" {data['wrong_codes']} código(s) errado(s) no teclado." if data.get("wrong_codes") else ""
+        return DeviceResult(True, True, f"Fechadura {bolt}. {door}{mode}{bad}", simulated=False, state=self.status())

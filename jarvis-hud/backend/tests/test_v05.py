@@ -708,9 +708,9 @@ async def test_own_lock_locks_and_reads_with_signed_messages_only():
     state = {"locked": False, "door_open": False, "battery": 87}
     lock = OwnLock("http://192.168.0.50", SECRET, client=fake_lock(state, seen=seen))
     st = await lock.command("status", {})
-    assert st.executed and st.message == "Fechadura DESTRANCADA. Bateria 87%."
+    assert st.executed and st.message.startswith("Fechadura ABRINDO (solenoide energizado). Porta fechada.")
     ok = await lock.command("lock", {})
-    assert ok.executed and "confirmado pelo sensor" in ok.message and state["locked"] and seen == [("GET", "/status"), ("POST", "/lock")]
+    assert ok.executed and "circuito confirmou" in ok.message and state["locked"] and seen == [("GET", "/status"), ("POST", "/lock")]
     no = await lock.command("unlock", {})
     assert no.executed is False and "não existe" in no.message and seen[-1] == ("POST", "/lock")      # nada foi enviado
     assert "unlock" not in lock.actions
@@ -734,3 +734,129 @@ def test_lock_pairing_config_and_voice_never_unlocks(tmp_path):
     assert r.match("a porta está trancada?").calls[0].args == {"device_id": "fechadura", "action": "status"}
     unlock = r.match("Jarvis, destranca a porta")
     assert unlock.calls == [] and "não é permitido" in unlock.render([], "senhor")
+
+
+
+# ---------------------------------------------------------------- firmware real da fechadura (C++ compilado no PC)
+import shutil  # noqa: E402
+import subprocess as _sp  # noqa: E402
+
+FIRMWARE = Path(__file__).resolve().parents[2] / "firmware"
+
+
+@pytest.fixture(scope="module")
+def firmware_bins(tmp_path_factory):
+    """Compila o protocolo e o módulo JarvisLock.h + exemplo_integracao.ino com Arduino simulado (OpenSSL no lugar do mbedtls)."""
+    if not shutil.which("g++") or not Path("/usr/include/openssl/hmac.h").exists():
+        pytest.skip("sem g++/OpenSSL para compilar o firmware no PC")
+    out = tmp_path_factory.mktemp("fw")
+    test_dir = FIRMWARE / "teste_nativo"
+    (out / "secrets.h").write_text('#pragma once\n#define WIFI_SSID "x"\n#define WIFI_PASS "x"\n#define JARVIS_SECRET_HEX "' + SECRET.hex() + '"\n')
+    flags = ["-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", f"-I{test_dir / 'stubs'}", f"-I{out}", f"-I{FIRMWARE / 'fechadura_jarvis'}"]
+    for name in ("teste_protocolo", "teste_modulo"):
+        r = _sp.run(["g++", *flags, "-x", "c++", "-o", str(out / name), str(test_dir / f"{name}.cpp"), "-lcrypto"], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+    return out
+
+
+def test_firmware_protocol_matches_the_python_side(firmware_bins):
+    ts, now = "1763000000", 1763000005
+    nonce = "a" * 24
+    good = sign(SECRET, f"POST\n/lock\n{ts}\n{nonce}\n")
+    lines = [f"init\t{SECRET.hex()}",
+             "\t".join(["check", "POST", "/lock", ts, nonce, "-", good, str(now)]),               # válido
+             "\t".join(["check", "POST", "/lock", ts, nonce, "-", good, str(now)]),               # mesmo nonce de novo
+             "\t".join(["check", "POST", "/lock", ts, "b" * 24, "-", sign(SECRET, f"POST\n/lock\n{ts}\n{'b' * 24}\n"), str(now + 40)]),
+             "\t".join(["check", "POST", "/lock", ts, "c" * 24, "-", "0" * 64, str(now)]),
+             "\t".join(["check", "GET", "/status", ts, "d" * 24, "-", sign(SECRET, f"GET\n/status\n{ts}\n{'d' * 24}\n"), "0"]),
+             f"resp\t{nonce}\t{{\"locked\":true}}", "init\tcurto"]
+    r = _sp.run([str(firmware_bins / "teste_protocolo")], input="\n".join(lines) + "\n", capture_output=True, text=True)
+    assert r.stdout.split("\n")[:8] == ["ok", "ok", "pedido repetido", "horario fora da janela", "assinatura invalida", "fechadura sem hora (NTP)",
+                                         sign(SECRET, f"RESP\n{nonce}\n" + '{"locked":true}'), "segredo invalido"]
+
+
+class FirmwareProcess:
+    """O módulo compilado rodando como processo; o JARVIS conversa com ele por um transporte httpx."""
+
+    def __init__(self, binary):
+        self.p = _sp.Popen([str(binary)], stdin=_sp.PIPE, stdout=_sp.PIPE, text=True, bufsize=1)
+        self.now = 1763000000
+
+    def cmd(self, line):
+        self.p.stdin.write(line + "\n")
+        self.p.stdin.flush()
+        return self.p.stdout.readline().rstrip("\n")
+
+    def transport(self):
+        def handler(req: httpx.Request) -> httpx.Response:
+            out = self.cmd("\t".join(["req", req.method, req.url.path, req.headers["X-Jarvis-Time"], req.headers["X-Jarvis-Nonce"],
+                                      req.headers["X-Jarvis-Sig"], str(self.now)]))
+            code, sig, body = out.split("\t", 2)
+            return httpx.Response(int(code), text=body, headers={"X-Lock-Sig": sig} if sig else {})
+
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    def close(self):
+        self.p.stdin.close()
+        self.p.wait(timeout=5)
+
+
+async def test_jarvis_talks_to_the_real_firmware_module_end_to_end(firmware_bins):
+    fw = FirmwareProcess(firmware_bins / "teste_modulo")
+    try:
+        lock = OwnLock("http://192.168.0.50:8080", SECRET, client=fw.transport(), clock=lambda: fw.now)
+        st = await lock.command("status", {})
+        assert st.executed and "Fechadura travada" in st.message and "Sem sensor de porta" in st.message
+        assert fw.cmd("abrir\tapp") == "solenoide=1"                                         # o app abre (caminho do TCC)
+        cut = await lock.command("lock", {})
+        assert cut.executed and "circuito confirmou" in cut.message and lock.events[0]["src"] == "jarvis" and lock.events[1]["src"] == "app"
+        down = await lock.command("lockdown", {})
+        assert down.executed and "Modo trancado ligado" in down.message and lock.status()["lockdown"] is True
+        assert fw.cmd("abrir\tapp") == "solenoide=0"                                         # modo trancado: app não abre
+        assert fw.cmd("abrir\trosto") == "solenoide=0"
+        assert fw.cmd("abrir\tteclado") == "solenoide=1"                                     # teclado continua abrindo
+        assert fw.cmd("passa\t3100") == "solenoide=0"                                        # e trava sozinho depois de 3 s
+        for _ in range(3):
+            fw.cmd("errado")
+        st = await lock.command("status", {})
+        assert "3 código(s) errado(s)" in st.message and lock.events[0] == {"t": fw.now, "src": "teclado", "ok": False}
+        assert fw.cmd("mestre") == "ok"
+        assert (await lock.command("status", {})).state["lockdown"] is False                  # só o teclado desliga o modo
+        assert fw.cmd("\t".join(["req", "POST", "/unlock", "1", "x" * 24, "0" * 64, str(fw.now)])).startswith("404")   # não existe destrancar
+        fw.now += 120                                                                        # relógio do PC adiantado 2 min
+        late = OwnLock("http://192.168.0.50:8080", SECRET, client=fw.transport(), clock=lambda: fw.now - 120)
+        assert (await late.command("status", {})).executed is False
+        wrong = OwnLock("http://192.168.0.50:8080", bytes(32), client=fw.transport(), clock=lambda: fw.now)
+        assert (await wrong.command("lock", {})).executed is False                           # segredo errado: recusado
+    finally:
+        fw.close()
+
+
+def test_lockdown_voice_command():
+    r = LocalRouter(Permissions(), lambda: {"control_device"})
+    for text in ("ativa o modo trancado", "ninguém entra hoje", "bloqueia a fechadura"):
+        assert r.match(text).calls[0].args == {"device_id": "fechadura", "action": "lockdown"}, text
+
+
+async def test_lock_events_become_hud_alerts(firmware_bins, settings, perms):
+    from app.assistant import Assistant
+
+    core = Assistant(settings, gemini=None, memory=MemoryStore(":memory:"), perms=perms, controller=FakeController(), devices=DeviceRegistry(),
+                     weather=WeatherService(settings.location, enabled=False), wake=None)
+    fw = FirmwareProcess(firmware_bins / "teste_modulo")
+    try:
+        fw.now = int(_dt.now().timestamp())
+        core.devices.register(OwnLock("http://192.168.0.50:8080", SECRET, client=fw.transport(), clock=lambda: fw.now))
+        fw.cmd("abrir\tteclado")
+        assert await core.check_lock() == []                                   # 1ª leitura: não repete o histórico
+        fw.now += 1
+        fw.cmd("passa\t3100")
+        fw.cmd("abrir\tapp")
+        notes = await core.check_lock()
+        assert len(notes) == 1 and notes[0].startswith("Porta aberta pelo app às")
+        for _ in range(3):
+            fw.cmd("errado")
+        assert await core.check_lock() == ["Atenção: 3 códigos errados seguidos no teclado da fechadura."]
+        assert await core.check_lock() == []                                   # não repete o mesmo alerta
+    finally:
+        fw.close()

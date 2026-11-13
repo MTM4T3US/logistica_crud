@@ -16,3 +16,8 @@ backend/config/permissions.json
 backend/**/__pycache__/
 backend/.pytest_cache/
 backend/models/
+
+# segredos do firmware da fechadura
+firmware/**/secrets.h
+firmware/teste_nativo/teste_protocolo
+firmware/teste_nativo/teste_modulo

@@ -58,7 +58,7 @@ continuam de graça e locais.
 | Computer use | **Dublê** (IA roteirizada) — pendente no Windows com a sua cota |
 | Agenda, lembretes, boas-vindas com a agenda | **Real aqui** (núcleo + painel) |
 | Luzes Tuya | **Dublê** — pendente com as suas lâmpadas |
-| Fechadura | **Dublê** do protocolo — firmware pendente (preciso do hardware) |
+| Fechadura (0.5.1) | Módulo de firmware para o seu ESP32 + solenoide (`firmware/fechadura_jarvis/`), **compilado e testado de ponta a ponta no PC** contra o cliente do JARVIS (Arduino simulado). Falta compilar com o núcleo do ESP32 e testar na fechadura (fase 16) |
 
 ## Pendências
 
@@ -67,3 +67,17 @@ continuam de graça e locais.
 3. Cenas com as luzes de casa (ex.: "modo cinema" apagando a sala). Já dá para fazer pelas rotinas em
    `permissions.json`, com o passo `{"tool": "house_lights", "args": {"target": "casa", "power": "off"}}`.
 4. Modelo especializado de computer use, se aparecer na sua conta.
+
+## Atualização 0.5.1 — fechadura do TCC
+
+Hardware informado: ESP32 DevKit, solenoide 12 V, teclado, app (reconhecimento facial e botão) com backend
+no Render, sem sensores, fora do Wi-Fi.
+
+- **Módulo de firmware:** `firmware/fechadura_jarvis/JarvisLock.h` se acrescenta ao firmware atual (não o
+  substitui). Oferece `/status`, `/lock` (corta o solenoide), `/lockdown` (modo trancado: app, rosto e
+  painel não abrem; o teclado abre; só o teclado desliga o modo) e os últimos 10 eventos.
+- **Avisos no HUD:** "Porta aberta pelo app às 21:03". O JARVIS fala "3 códigos errados seguidos" em voz alta.
+- **Testes:** 251 testes do núcleo. Dois deles compilam o C++ do módulo com `-Werror` e conversam com
+  ele pelo cliente real do JARVIS.
+- **Documentação:** [`FECHADURA.md`](FECHADURA.md) explica ligações (diodo 1N4007 no solenoide, MOSFET
+  ou relé), recomenda o sensor reed e tem observações sobre o painel público no Render.

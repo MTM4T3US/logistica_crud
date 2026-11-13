@@ -7,6 +7,8 @@ import contextlib
 import hashlib
 import time
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +48,7 @@ from .voice.wake import WakeDetector, make_wake_detector
 from .router import LocalRouter
 from .voice.tts import STYLES, GeminiTTS, LocalTTS, PiperTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 MAX_TOOL_ROUNDS = 6
 CONFIRM_TIMEOUT_S = 45.0
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -151,6 +153,8 @@ class Assistant:
         self.tools.extensions.append(AgendaTools(self.agenda).specs)
         self.conns: set[Connection] = set()
         self._reminders: asyncio.Task | None = None
+        self._lock_seen: set[str] = set()
+        self._lock_wrong = 0
         # 0.5: luzes de casa Smart Life/Tuya (rede local)
         lights, self.home_note = build_lights(settings.tuya_devices or self.data_dir / "tuya" / "devices.json")
         # 0.5: fechadura do usuário (só trancar e ver), quando pareada com scripts/parear_fechadura.py
@@ -629,10 +633,47 @@ class Assistant:
     def agenda_state(self) -> dict[str, Any]:
         return {"today": [Agenda.public(e) for e in self.agenda.today()], "upcoming": [Agenda.public(e) for e in self.agenda.upcoming(14)]}
 
+    async def check_lock(self) -> list[str]:
+        """Novos eventos da fechadura real (aberturas, códigos errados) viram avisos. Devolve os textos."""
+        lock = self.devices.get("fechadura")
+        if not isinstance(lock, OwnLock):
+            return []
+        res = await self.devices.command("fechadura", "status", {})
+        if not res.executed:
+            return []
+        seen = self._lock_seen
+        first = not seen
+        notes = []
+        names = {"teclado": "pelo teclado", "app": "pelo app", "rosto": "pelo reconhecimento facial", "painel": "pelo painel", "jarvis": "pelo JARVIS"}
+        for ev in reversed(lock.events):
+            key = f"{ev.get('t')}-{ev.get('src')}-{ev.get('ok')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            if first or ev.get("src") in ("jarvis", "trancado", "liberado"):
+                continue                                  # na 1ª leitura não repete o histórico antigo
+            when = datetime.fromtimestamp(int(ev.get("t", 0)), ZoneInfo(self.settings.location.timezone)).strftime("%H:%M") if ev.get("t") else ""
+            if ev.get("ok"):
+                notes.append(f"Porta aberta {names.get(ev.get('src'), ev.get('src'))} às {when}.")
+            elif ev.get("src") != "teclado":
+                notes.append(f"Tentativa de abrir {names.get(ev.get('src'), ev.get('src'))} recusada (modo trancado) às {when}.")
+        wrong = int(lock.status().get("wrong_codes") or 0)
+        if wrong >= 3 and wrong != self._lock_wrong:
+            notes.append(f"Atenção: {wrong} códigos errados seguidos no teclado da fechadura.")
+        self._lock_wrong = wrong
+        return notes
+
     async def _reminder_loop(self) -> None:
-        """A cada 30 s: lembretes vencidos viram aviso no HUD e fala (detalhes só com o JARVIS liberado)."""
+        """A cada 30 s: lembretes vencidos e eventos da fechadura viram aviso no HUD e fala."""
         while True:
             await asyncio.sleep(30)
+            with contextlib.suppress(Exception):
+                for text in await self.check_lock():
+                    for conn in list(self.conns):
+                        with contextlib.suppress(Exception):
+                            await conn.send({"type": "reminder", "text": text, "event": None})
+                            if "Atenção" in text and (conn.turn is None or conn.turn.done()):
+                                conn.turn = asyncio.create_task(self.speak_text(conn, f"fechadura-{uuid.uuid4().hex[:6]}", text, mode="alerta"))
             try:
                 due = await asyncio.to_thread(self.agenda.due_reminders)
             except Exception:

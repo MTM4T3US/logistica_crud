@@ -171,11 +171,11 @@ class ToolRegistry:
             specs.append(ToolSpec(
                 "control_device", "Comandar dispositivo",
                 "Envia um comando a um dispositivo. Ações — leds: on, off, color (color=#RRGGBB), brightness (value 0-100); "
-                "persiana: open, close, stop, position (value 0-100); fechadura: status, lock (unlock é sempre recusado); "
+                "persiana: open, close, stop, position (value 0-100); fechadura: status, lock, lockdown (modo trancado: app e rosto não abrem; unlock é sempre recusado); "
                 "robo: status, move (direction, value=velocidade), stop, emergency_stop, reset_emergency.",
                 _obj({
                     "device_id": {"type": "string", "enum": self.devices.ids()},
-                    "action": {"type": "string", "enum": ["on", "off", "color", "brightness", "open", "close", "stop", "position", "status", "lock", "unlock", "move", "emergency_stop", "reset_emergency"]},
+                    "action": {"type": "string", "enum": ["on", "off", "color", "brightness", "open", "close", "stop", "position", "status", "lock", "lockdown", "unlock", "move", "emergency_stop", "reset_emergency"]},
                     "value": {"type": "integer", "minimum": 0, "maximum": 100},
                     "color": {"type": "string", "maxLength": 7},
                     "direction": {"type": "string", "enum": ["forward", "backward", "left", "right"]},

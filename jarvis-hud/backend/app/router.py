@@ -126,6 +126,8 @@ class LocalRouter:
                 if any(re.search(rf"\b{re.escape(n)}\b", t) for n in names) or (rid == "programar" and re.search(r"\bprepar\w* .*program", t)):
                     return Plan("routine", [_call("run_routine", routine_id=rid)], _report(f"Rotina “{r.name}” executada, {{title}}."))
         # ---- fechadura: trancar e ver (destrancar por voz não existe)
+        if "control_device" in tools and re.search(r"\bmodo trancado\b|\bninguem (entra|abre)\b|\bbloque\w* (a )?fechadura\b", t):
+            return Plan("lock", [_call("control_device", device_id="fechadura", action="lockdown")], lambda o, title: o[0].summary)
         if "control_device" in tools and re.search(r"\b(porta|fechadura)\b", t):
             if re.search(r"\b(destranc\w*|abr\w*|libera\w*)\b", t):
                 return Plan("lock", [], lambda o, title: f"Destrancar por voz não é permitido, {title}. Use o teclado, a digital ou a chave da fechadura.")
