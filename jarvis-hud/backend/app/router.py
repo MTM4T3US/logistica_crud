@@ -117,6 +117,7 @@ class LocalRouter:
         t = re.sub(rf"^(ei |ok |oi )?{self.wake}\b[ ,]*", "", t).strip(" ,")
         if not t:
             return None
+        self._whole = t          # cenas "exatas" ("bom dia") só valem como frase inteira, nunca como pedaço
         # vários comandos na mesma frase: só local se TODAS as partes forem entendidas
         verbs = r"abr|lig|deslig|apag|acend|coloq|deix|toc|paus|despaus|aument|diminu|abaix|sob|minimiz|maximiz|organiz|ativ|prepar|fech|mud|volum|luz|leds?|prox|pul|volt|silenci|brilho"
         parts = [p.strip(" ,") for p in re.split(rf",| e depois | depois | e (?=(?:o |a |as |os )?(?:{verbs})\w*\b)", t) if p.strip(" ,")]
@@ -143,12 +144,17 @@ class LocalRouter:
         if re.fullmatch(r"(pare|para|parar|silencio|cala a boca|chega|cancela|cancelar|esquece|deixa pra la)( por favor)?", t):
             return Plan("stop")
 
-        # ---- rotinas e cenas ("modo cinema", "prepara tudo para programar")
+        # ---- rotinas e cenas ("modo cinema", "prepara tudo para programar", "bom dia", "estou saindo")
         if "run_routine" in tools:
             for rid, r in self.perms.routines.items():
-                names = {fold(r.name), fold(rid), f"modo {fold(rid)}"}
-                if any(re.search(rf"\b{re.escape(n)}\b", t) for n in names) or (rid == "programar" and re.search(r"\bprepar\w* .*program", t)):
-                    return Plan("routine", [_call("run_routine", routine_id=rid)], _report(f"Rotina “{r.name}” executada, {{title}}."))
+                names = {fold(r.name), fold(rid).replace("_", " "), f"modo {fold(rid).replace('_', ' ')}", *(fold(w) for w in r.words)}
+                if r.exact:
+                    # "bom dia"/"boa noite": só a frase inteira (não "bom dia, que horas são?")
+                    hit = t == getattr(self, "_whole", t) and any(re.fullmatch(rf"{re.escape(n)}(,? (jarvis|senhor|chefe))?", t) for n in names)
+                else:
+                    hit = any(re.search(rf"\b{re.escape(n)}\b", t) for n in names)
+                if hit or (rid == "programar" and re.search(r"\bprepar\w* .*program", t)):
+                    return Plan("routine", [_call("run_routine", routine_id=rid)], self._say_routine(r.name))
         # ---- fechadura: trancar e ver (destrancar por voz não existe)
         if "control_device" in tools and re.search(r"\bmodo trancado\b|\bninguem (entra|abre)\b|\bbloque\w* (a )?fechadura\b", t):
             return Plan("lock", [_call("control_device", device_id="fechadura", action="lockdown")], lambda o, title: o[0].summary)
@@ -401,10 +407,22 @@ class LocalRouter:
         if "cancel_shutdown" in tools and re.search(r"\bcancel\w* (o )?(desligamento|reinicio)\b|\bnao (desliga|reinicia)\b", t):
             return Plan("pc", [_call("cancel_shutdown")], _report("Desligamento cancelado, {title}."))
         if "shutdown_pc" in tools and re.search(pc, t):
-            if re.search(r"\breinici\w*\b", t):
-                return Plan("pc", [_call("shutdown_pc", restart=True)], _report("Reiniciando em um minuto, {title}."))
-            if re.search(r"\b(deslig\w*)\b", t):
-                return Plan("pc", [_call("shutdown_pc", restart=False)], _report("Desligando em um minuto, {title}."))
+            restart = bool(re.search(r"\breinici\w*\b", t))
+            if restart or re.search(r"\b(deslig\w*)\b", t):
+                # "em 10 minutos", "daqui a 5 min", "em 90 segundos": o tempo dito vale (30 s a 10 min)
+                m = re.search(r"\b(?:em|daqui a|daqui|depois de)\s+(\d{1,4}|um|uma|meia)\s*(h|horas?|min\w*|s|seg\w*)\b", t)
+                delay = 60
+                if m:
+                    n = {"um": 1, "uma": 1, "meia": 0.5}.get(m.group(1)) or int(m.group(1))
+                    unit = m.group(2)
+                    delay = int(n * (3600 if unit.startswith("h") else 60 if unit.startswith("min") else 1))
+                    if delay > 600:
+                        return Plan("pc", [], lambda _o, title: f"Consigo agendar no máximo 10 minutos, {title}. Peça de novo mais perto da hora.")
+                    delay = max(30, delay)
+                when = "um minuto" if delay == 60 else f"{delay // 60} minutos" if delay % 60 == 0 else f"{delay} segundos"
+                verb = "Reiniciando" if restart else "Desligando"
+                args = {"restart": restart, **({"delay_s": delay} if delay != 60 else {})}
+                return Plan("pc", [_call("shutdown_pc", **args)], _report(f"{verb} em {when}, {{title}}."))
         if "sleep_pc" in tools and re.search(r"\b(suspend\w*|hibern\w*|suspensao)\b", t):
             return Plan("pc", [_call("sleep_pc")], _report("Suspendendo, {title}."))
         if "lock_windows" in tools and re.search(r"\b(bloque\w*|trav\w*)\b", t) and re.search(pc, t):
@@ -477,6 +495,20 @@ class LocalRouter:
         return None
 
     # ------------------------------------------------------------------ respostas faladas
+    @staticmethod
+    def _say_routine(name: str) -> Callable[[list[ToolOutcome], str], str]:
+        """Cena: diz o que foi feito; se ela tem resumo da cidade ou agenda, fala o resumo."""
+        def render(outs: list[ToolOutcome], title: str) -> str:
+            o = outs[0] if outs else None
+            if o is None or not o.executed:
+                return f"Não consegui, {title}: {o.summary if o else 'sem resposta'}"
+            speech = " ".join(o.data.get("speech", []))
+            failed = [st["message"] for st in o.data.get("steps", []) if not st.get("executed") and not st.get("skipped")]
+            head = f"{name}, {title}." if speech else f"{name} pronto, {title}."
+            tail = f" Mas uma parte falhou: {failed[0]}" if failed else ""
+            return f"{head} {speech}{tail}".strip()
+        return render
+
     @staticmethod
     def _say_briefing(outs: list[ToolOutcome], title: str) -> str:
         return outs[0].summary if outs and outs[0].executed else f"Não consegui o resumo agora, {title}."

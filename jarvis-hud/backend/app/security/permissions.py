@@ -62,12 +62,58 @@ class RoutineEntry:
     name: str
     steps: tuple[dict[str, Any], ...]
     confirm: bool = False
+    #: 0.6 — frases que também acionam a cena ("estou saindo"); exact = só a frase inteira ("bom dia")
+    words: tuple[str, ...] = ()
+    exact: bool = False
+    icon: str = ""
+    #: horário padrão: {"at": "07:00", "days": "dias_uteis"} (o painel pode mudar/desligar)
+    schedule: dict[str, Any] | None = None
+
+
+#: 0.6 — cenas da casa que já vêm prontas. Um passo cuja ferramenta não existe neste PC (ex.: sem luzes Tuya)
+#: é pulado com aviso. Uma rotina do permissions.json com o mesmo id substitui a padrão.
+DEFAULT_SCENES: list[dict[str, Any]] = [
+    {"id": "bom_dia", "name": "Bom dia", "icon": "sol", "exact": True, "words": ["bom dia"], "confirm": False,
+     "steps": [{"tool": "house_lights", "args": {"target": "casa", "white": True, "brightness": 100}},
+               {"tool": "set_lights", "args": {"color": "#ffd9a0"}},
+               {"tool": "city_briefing", "args": {}}]},
+    {"id": "cinema", "name": "Modo cinema", "icon": "filme", "words": ["hora do filme", "vamos ver um filme"], "confirm": False,
+     "steps": [{"tool": "house_lights", "args": {"target": "casa", "power": "off"}},
+               {"tool": "set_lights", "args": {"scene_id": "cinema"}},
+               {"tool": "set_volume", "args": {"percent": 35}}]},
+    {"id": "foco", "name": "Modo foco", "icon": "foco", "words": ["hora de trabalhar", "vamos trabalhar", "hora de estudar"], "confirm": False,
+     "steps": [{"tool": "house_lights", "args": {"target": "casa", "white": True, "brightness": 100}},
+               {"tool": "set_lights", "args": {"color": "#ffffff", "brightness": 80}},
+               {"tool": "set_volume", "args": {"percent": 20}}]},
+    {"id": "boa_noite", "name": "Boa noite", "icon": "lua", "exact": True, "words": ["boa noite"], "confirm": False,
+     "steps": [{"tool": "house_lights", "args": {"target": "todas", "power": "off"}},
+               {"tool": "set_lights", "args": {"power": "off"}},
+               {"tool": "control_device", "args": {"device_id": "fechadura", "action": "lock"}},
+               {"tool": "agenda_list", "args": {"day": "amanha"}}]},
+    {"id": "saindo", "name": "Saindo de casa", "icon": "porta", "words": ["estou saindo", "saindo de casa", "vou sair"], "confirm": True,
+     "steps": [{"tool": "house_lights", "args": {"target": "todas", "power": "off"}},
+               {"tool": "set_lights", "args": {"power": "off"}},
+               {"tool": "control_device", "args": {"device_id": "fechadura", "action": "lockdown"}},
+               {"tool": "lock_windows", "args": {}}]},
+]
+
+
+def routine_step_ok(step: Any) -> bool:
+    """Passos permitidos numa cena. Da fechadura, só trancar/modo trancado/estado — nunca destrancar."""
+    if not isinstance(step, dict) or step.get("tool") not in ROUTINE_TOOLS:
+        return False
+    if step["tool"] == "control_device":
+        a = step.get("args") or {}
+        return (a.get("device_id") == "fechadura" and a.get("action") in ("lock", "lockdown", "status")) or \
+            (a.get("device_id") == "leds" and a.get("action") in ("on", "off", "color", "brightness"))
+    return True
 
 
 #: ferramentas que uma rotina pode encadear (nada além disso — nunca ações destrutivas)
 PC_DEFAULTS = {"apps": True, "web": True, "settings": True, "files": True, "teclado": True, "screenshot": True,
                "brightness": True, "power": True, "computer_use": True}
-ROUTINE_TOOLS = {"open_app", "open_folder", "open_project", "set_volume", "media_control", "window_control", "set_lights", "house_lights", "launch_app", "open_website"}
+ROUTINE_TOOLS = {"open_app", "open_folder", "open_project", "set_volume", "media_control", "window_control", "set_lights", "house_lights", "launch_app",
+                 "open_website", "city_briefing", "agenda_list", "control_device", "lock_windows", "set_brightness"}
 
 _SHELL_META = set("&|;<>`$\n\r")
 
@@ -123,10 +169,15 @@ class Permissions:
                 continue
             if item.get("id"):
                 perms.scenes[item["id"]] = SceneEntry(item["id"], item.get("name", item["id"]), bool(item.get("on", True)), color, bright)
-        for item in raw.get("routines", []):
-            steps = tuple(s for s in item.get("steps", []) if s.get("tool") in ROUTINE_TOOLS)
-            if steps and len(steps) == len(item.get("steps", [])):
-                perms.routines[item["id"]] = RoutineEntry(item["id"], item.get("name", item["id"]), steps, bool(item.get("confirm", False)))
+        own_ids = {item.get("id") for item in raw.get("routines", [])}
+        defaults = [d for d in DEFAULT_SCENES if d["id"] not in own_ids] if raw.get("cenas_padrao", True) is not False else []
+        for item in [*defaults, *raw.get("routines", [])]:
+            steps = tuple(st for st in item.get("steps", []) if routine_step_ok(st))
+            if item.get("id") and steps and len(steps) == len(item.get("steps", [])):
+                sch = item.get("schedule") if isinstance(item.get("schedule"), dict) else None
+                perms.routines[item["id"]] = RoutineEntry(
+                    item["id"], item.get("name", item["id"]), steps, bool(item.get("confirm", False)),
+                    tuple(str(w) for w in item.get("words", []) if str(w).strip()), bool(item.get("exact", False)), str(item.get("icon", "")), sch)
         perms.volume_control = bool(raw.get("volume_control", True))
         perms.process_list = bool(raw.get("process_list", True))
         perms.media_control = bool(raw.get("media_control", True))

@@ -100,25 +100,6 @@
           }
         }
       ]
-    },
-    {
-      "id": "cinema",
-      "name": "Modo cinema",
-      "confirm": false,
-      "steps": [
-        {
-          "tool": "set_lights",
-          "args": {
-            "scene_id": "cinema"
-          }
-        },
-        {
-          "tool": "set_volume",
-          "args": {
-            "percent": 35
-          }
-        }
-      ]
     }
   ],
   "volume_control": true,
@@ -179,5 +160,7 @@
     "brightness": true,
     "power": true,
     "computer_use": true
-  }
+  },
+  "cenas_padrao": true,
+  "_cenas": "0.6: já vêm prontas as cenas bom_dia, cinema, foco, boa_noite e saindo (luzes de casa + fita + volume + fechadura + resumo). Para mudar uma, crie aqui uma rotina com o mesmo id; para desligar todas, \"cenas_padrao\": false. Horários: Configurações → CENAS no HUD."
 }

@@ -327,13 +327,14 @@ def test_router_recognizes_everyday_commands(router, said, calls):
     assert plan is not None and [(c.name, c.args) for c in plan.calls] == calls
 
 
-@pytest.mark.parametrize("said", ["por que o céu é azul?", "me conte uma piada", "abre o spotify e me explica o que é um quasar", "bom dia", "o que você acha disso?"])
+@pytest.mark.parametrize("said", ["por que o céu é azul?", "me conte uma piada", "abre o spotify e me explica o que é um quasar", "boa tarde", "o que você acha disso?"])
 def test_router_sends_conversation_to_the_ai(router, said):
     assert router.match(said) is None
 
 
 def test_router_stop_and_offline_chat(router):
-    assert router.match("Jarvis, pare").kind == "stop" and router.match("bom dia", allow_chat=True).kind == "chat"
+    assert router.match("Jarvis, pare").kind == "stop" and router.match("boa tarde", allow_chat=True).kind == "chat"
+    assert router.match("bom dia").kind == "routine"          # 0.6: "bom dia" é a cena Bom dia (luzes + resumo)
 
 
 # ---------------------------------------------------------------- voz e escuta locais

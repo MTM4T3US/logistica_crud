@@ -301,18 +301,30 @@ class ToolRegistry:
 
     async def _routine(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
         routine = self.perms.routines[args["routine_id"]]
-        if routine.confirm and not await run.confirm(f"Executar a rotina “{routine.name}” ({len(routine.steps)} etapas)?"):
-            return ToolOutcome(run.call, False, False, f"O usuário não autorizou a rotina {routine.name}.")
+        available = self.specs()
+        todo = [st for st in routine.steps if st["tool"] in available]
+        if routine.confirm and not await run.confirm(f"Executar a rotina “{routine.name}” ({len(todo)} etapas)?"):
+            return ToolOutcome(run.call, False, False, f"O usuário não autorizou “{routine.name}”.")
         steps = []
+        speech: list[str] = []
         for i, step in enumerate(routine.steps):
             sub = ToolCall(id=f"{run.call.id}.{i + 1}", name=step["tool"], args=dict(step.get("args", {})))
+            if sub.name not in available:
+                # 0.6: cena pronta num PC sem esse recurso (ex.: sem luzes Tuya) — pula, não é falha
+                steps.append({"tool": sub.name, "args": sub.args, "ok": True, "executed": False, "skipped": True,
+                              "message": f"pulado: {self.label(sub.name)} não está disponível neste computador"})
+                continue
             # etapas de rotina já foram aprovadas em bloco: não pedem confirmação individual
             res = await self.execute(sub, _approved, run.notify)
             steps.append({"tool": sub.name, "args": sub.args, "ok": res.ok, "executed": res.executed, "message": res.summary})
-        done = sum(1 for s in steps if s["executed"])
-        ok = done == len(steps)
-        summary = f"Rotina {routine.name}: {done} de {len(steps)} etapas executadas."
-        return ToolOutcome(run.call, ok, done > 0, summary, data={"steps": steps})
+            if res.executed and sub.name in ("city_briefing", "agenda_list"):
+                speech.append(res.summary)
+        ran = [st for st in steps if not st.get("skipped")]
+        done = sum(1 for st in ran if st["executed"])
+        ok = done == len(ran)
+        skipped = len(steps) - len(ran)
+        summary = f"{routine.name}: {done} de {len(ran)} etapas feitas" + (f" ({skipped} pulada(s): recurso ausente)." if skipped else ".")
+        return ToolOutcome(run.call, ok, done > 0, summary, data={"steps": steps, "speech": speech})
 
     async def _control_device(self, args: dict[str, Any], run: ToolRun) -> ToolOutcome:
         params = {k: args[k] for k in ("value", "color", "direction") if k in args}

@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react'
 import { audio } from '../core/audio'
-import { api, deleteMusic, enrollFace, faceEnable, faceForget, lockNow, playSample, refresh, saveSettings, setMuted, setWake, testIntro, uploadMusic } from '../core/backend'
-import { useJarvis, type CoreState } from '../state/jarvis'
+import { api, deleteMusic, enrollFace, faceEnable, faceForget, lockNow, playSample, quickAction, refresh, saveSettings, setMuted, setWake, testIntro, uploadMusic } from '../core/backend'
+import { useJarvis, type CoreState, type SceneData, type SceneSchedule } from '../state/jarvis'
+import { SceneIcon } from './icons'
+import { prettyKeys, shortName } from './Panels'
 import { useStore, type Quality } from '../state/store'
 import { DEMO_STATES } from './Hud'
+
+type Tab = 'geral' | 'voz' | 'casa' | 'entrada' | 'agenda' | 'sistema'
+const TABS: [Tab, string][] = [['geral', 'GERAL'], ['voz', 'VOZ'], ['casa', 'CASA'], ['entrada', 'ENTRADA'], ['agenda', 'AGENDA'], ['sistema', 'SISTEMA']]
 
 const ENGINE_LABEL: Record<string, string> = { auto: 'Automático', off: 'Desligado' }
 
@@ -52,6 +57,10 @@ export function Settings() {
   const voiceKey = activeTts?.id === 'gemini' ? 'tts_voice_gemini' : activeTts?.id === 'piper' ? 'tts_voice_piper' : 'tts_voice_local'
   const voiceValue = (rt && (rt as Record<string, unknown>)[voiceKey]) as string | undefined
   const online = j.conn === 'online'
+  const [tab, setTabState] = useState<Tab>(() => {
+    try { const t = localStorage.getItem('jarvis.aba') as Tab | null; return t && TABS.some(([id]) => id === t) ? t : 'geral' } catch { return 'geral' }
+  })
+  const setTab = (t: Tab) => { setTabState(t); setMsg(''); try { localStorage.setItem('jarvis.aba', t) } catch { /* modo privado */ } }
 
   return (
     <aside className="settings" aria-label="Configurações">
@@ -59,9 +68,12 @@ export function Settings() {
         <span>CONFIGURAÇÕES</span>
         <button onClick={() => useJarvis.setState({ settingsOpen: false })} aria-label="Fechar">×</button>
       </header>
-      {!online && <p className="warn">Núcleo offline. Inicie o backend (INICIAR.bat) para conversar; a demonstração visual continua disponível abaixo.</p>}
+      <nav className="stabs" role="tablist" aria-label="Seções das configurações">
+        {TABS.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>{label}</button>)}
+      </nav>
+      {!online && <p className="warn">Núcleo offline. Inicie o JARVIS (JARVIS.bat ou INICIAR.bat) para conversar; a demonstração visual continua disponível em Sistema.</p>}
 
-      {core && rt && (
+      {core && rt && tab === 'geral' && (
         <>
           <section>
             <h3>STATUS</h3>
@@ -108,6 +120,21 @@ export function Settings() {
             <p className="dim">Autorizados em {core.permissions.source}: {core.permissions.apps.length} apps, {core.permissions.folders.length} pastas, {core.permissions.routines.length} rotinas.{!core.system_actions.open_app && ' Abrir apps/pastas e volume só funcionam no Windows.'}</p>
           </section>
 
+          <section>
+            <h3>PRIVACIDADE</h3>
+            <p className="dim">
+              A chave da IA fica só no backend. {core.ai.mode === 'ai' ? 'O texto das conversas é enviado à API Gemini.' : 'Sem IA configurada, nenhuma conversa sai deste computador.'}
+              {' '}Histórico e lembranças ficam em um arquivo local. O microfone só liga quando você pede.
+            </p>
+            <label className="check"><input type="checkbox" checked={rt.cloud_audio_consent} onChange={(e) => save({ cloud_audio_consent: e.target.checked })} />Permitir envio do áudio do microfone à nuvem para transcrição</label>
+            <p className={core.voice.stt_cloud ? 'warn' : 'good'}>{core.voice.stt_active ? (core.voice.stt_cloud ? 'Transcrição atual: NUVEM (Gemini). Na escuta contínua, toda fala detectada é enviada.' : 'Transcrição atual: local — o áudio não sai do computador.') : 'Transcrição desligada.'}</p>
+            <p className={core.voice.tts_cloud ? 'warn' : 'good'}>{core.voice.tts_active ? (core.voice.tts_cloud ? 'Voz atual: NUVEM (o texto das respostas é enviado ao Gemini TTS).' : 'Voz atual: local.') : 'Voz desligada.'}</p>
+          </section>
+        </>
+      )}
+
+      {core && rt && tab === 'voz' && (
+        <>
           <section>
             <h3>VOZ</h3>
             {samples.length > 0 && (
@@ -229,31 +256,27 @@ export function Settings() {
             {j.mic === 'denied' && <p className="warn">O navegador negou o microfone. Libere a permissão no cadeado da barra de endereço.</p>}
           </section>
 
-          <Entrance core={core} />
-          <AgendaSection />
+
+        </>
+      )}
+
+      {core && tab === 'casa' && (
+        <>
+          <ScenesSection />
           <section>
             <h3>LUZES DE CASA</h3>
             <p className={core.home?.lights.length ? 'good' : 'dim'}>{core.home?.note ?? 'Sem informação.'}</p>
             {!!core.home?.lights.length && <p className="dim">{core.home.lights.map((l) => l.name).join(' · ')}</p>}
             <p className="dim">Smart Life / Tuya pela rede de casa, sem nuvem. Para configurar: CONFIGURAR_LUZES.bat (uma vez). Por voz: “apaga as luzes”, “luz da sala em azul”, “luzes a 30%”. As lâmpadas confirmam cada comando; a fita de LED não.</p>
           </section>
-
-          <section>
-            <h3>PRIVACIDADE</h3>
-            <p className="dim">
-              A chave da IA fica só no backend. {core.ai.mode === 'ai' ? 'O texto das conversas é enviado à API Gemini.' : 'Sem IA configurada, nenhuma conversa sai deste computador.'}
-              {' '}Histórico e lembranças ficam em um arquivo local. O microfone só liga quando você pede.
-            </p>
-            <label className="check"><input type="checkbox" checked={rt.cloud_audio_consent} onChange={(e) => save({ cloud_audio_consent: e.target.checked })} />Permitir envio do áudio do microfone à nuvem para transcrição</label>
-            <p className={core.voice.stt_cloud ? 'warn' : 'good'}>{core.voice.stt_active ? (core.voice.stt_cloud ? 'Transcrição atual: NUVEM (Gemini). Na escuta contínua, toda fala detectada é enviada.' : 'Transcrição atual: local — o áudio não sai do computador.') : 'Transcrição desligada.'}</p>
-            <p className={core.voice.tts_cloud ? 'warn' : 'good'}>{core.voice.tts_active ? (core.voice.tts_cloud ? 'Voz atual: NUVEM (o texto das respostas é enviado ao Gemini TTS).' : 'Voz atual: local.') : 'Voz desligada.'}</p>
-          </section>
+          <Devices />
         </>
       )}
+      {core && tab === 'entrada' && <Entrance core={core} />}
+      {core && tab === 'agenda' && <AgendaSection />}
+      {tab === 'sistema' && online && <AppSection />}
 
-      {core && <Devices />}
-
-      <section>
+      {tab === 'sistema' && <section>
         <h3>DESEMPENHO</h3>
         <p className="dim">FPS agora: {Math.round(((window as unknown as { __fps?: number }).__fps) ?? 0) || '—'} · GPU do navegador: {gpuName()}</p>
         {online && (
@@ -271,16 +294,16 @@ export function Settings() {
           </select>
         </label>
         {online && <div className="row"><button onClick={() => refresh(true)}>Atualizar clima e estado</button></div>}
-      </section>
+      </section>}
 
-      <section>
+      {tab === 'sistema' && <section>
         <h3>DEMONSTRAÇÃO <b className="demo">DEMO</b></h3>
         <p className="dim">Estados visuais com falas e dados fictícios (teclas 1–6; D roda a sequência).</p>
         <div className="row wrap">
           {DEMO_STATES.map(([m, label]) => <button key={m} className={hud.demo && hud.mode === m ? 'on' : ''} onClick={() => { hud.setSequence(false); hud.setMode(m) }}>{label}</button>)}
           <button className={hud.sequence ? 'on' : ''} onClick={() => hud.setSequence(!hud.sequence)}>Sequência</button>
         </div>
-      </section>
+      </section>}
       {msg && <p className="msg" role="status">{msg}</p>}
     </aside>
   )
@@ -351,7 +374,17 @@ function Devices() {
           </div>
         </>
       ) : <p className="dim">LEDs no modo simulador. Para a fita real: JARVIS_LEDS=bluetooth em backend\.env.</p>}
-      <p className="dim">Persiana, fechadura e robô: simuladores (nenhum hardware conectado). A fechadura nunca é destrancada pelo JARVIS.</p>
+      {(() => {
+        const sims = devices.filter((d) => d.simulated && d.id !== 'leds').map((d) => d.name)
+        const lock = devices.find((d) => d.id === 'fechadura')
+        return (
+          <>
+            {!!sims.length && <p className="dim">Simuladores (sem hardware): {sims.join(', ')}.</p>}
+            {lock && !lock.simulated && <p className="good">Fechadura real conectada ({String((lock.state as Record<string, unknown>).link ?? 'rede local')}).</p>}
+            <p className="dim">A fechadura só tranca e mostra o estado: o JARVIS nunca destranca, nem por voz nem pela rede.</p>
+          </>
+        )
+      })()}
       {msg && <p className="msg">{msg}</p>}
     </section>
   )
@@ -490,6 +523,84 @@ function AgendaSection() {
       </ul>
       <p className="dim">Fica só neste computador (backend/data/agenda.sqlite3). Por voz: “marca …”, “o que eu tenho hoje?”, “desmarca …”. Lembrete 15 min antes; as boas-vindas dizem os compromissos do dia.</p>
       {msg && <p className="good">{msg}</p>}
+    </section>
+  )
+}
+
+const DAY_LABEL: Record<SceneSchedule['days'], string> = { todos: 'Todos os dias', dias_uteis: 'Dias úteis', fim_de_semana: 'Fim de semana' }
+const STEP_LABEL: Record<string, string> = {
+  house_lights: 'luzes de casa', set_lights: 'fita de LED', control_device: 'fita/porta', set_volume: 'volume', city_briefing: 'resumo da cidade', agenda_list: 'agenda',
+  lock_windows: 'bloquear o Windows', set_brightness: 'brilho', open_app: 'programa', open_folder: 'pasta', launch_app: 'programa', play_media: 'música',
+}
+
+/** Cenas: rodar agora e agendar (hora + dias). O que cada cena faz fica no permissions.json. */
+function ScenesSection() {
+  const scenes = useJarvis((s) => s.core?.scenes) ?? []
+  const [msg, setMsg] = useState('')
+  const save = async (id: string, patch: Partial<SceneSchedule>) => {
+    const all: Record<string, SceneSchedule> = {}
+    for (const sc of scenes) if (sc.schedule) all[sc.id] = sc.schedule
+    const cur = all[id] ?? { at: '07:00', days: 'todos', on: false }
+    all[id] = { ...cur, ...patch }
+    try { await saveSettings({ scene_schedules: all }); setMsg('') } catch (e) { setMsg((e as Error).message) }
+  }
+  const steps = (sc: SceneData) => [...new Set(sc.steps.map((t) => STEP_LABEL[t] ?? t.replace(/_/g, ' ')))].join(' · ')
+  return (
+    <section>
+      <h3>CENAS</h3>
+      <p className="dim">Uma frase faz várias coisas: luzes de casa, fita, volume, porta, resumo. Também pelos botões do HUD e por horário.</p>
+      {scenes.length === 0 && <p className="warn">Nenhuma cena: o permissions.json tem "cenas_padrao": false e nenhuma rotina.</p>}
+      <div className="scene-list">
+        {scenes.map((sc) => {
+          const sch = sc.schedule
+          return (
+            <div key={sc.id} className={`scene-item ${sch?.on ? 'on' : ''}`}>
+              <div className="scene-top">
+                <i><SceneIcon icon={sc.icon} /></i>
+                <span><b>{sc.name}</b><small>{sc.words.length ? `“${sc.words[0]}”` : `“${shortName(sc.name).toLowerCase()}”`} · {steps(sc)}</small></span>
+                <button onClick={() => quickAction(`cena:${sc.id}`)} title="Rodar agora">Rodar</button>
+              </div>
+              <div className="scene-sched">
+                <label className="check"><input type="checkbox" checked={!!sch?.on} onChange={(e) => void save(sc.id, { on: e.target.checked })} />Agendar</label>
+                <input type="time" value={sch?.at ?? '07:00'} aria-label={`Horário de ${sc.name}`} onChange={(e) => { if (/^\d{2}:\d{2}$/.test(e.target.value)) void save(sc.id, { at: e.target.value }) }} />
+                <select value={sch?.days ?? 'todos'} aria-label={`Dias de ${sc.name}`} onChange={(e) => void save(sc.id, { days: e.target.value as SceneSchedule['days'] })}>
+                  {Object.entries(DAY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+              {sc.confirm && sch?.on && <p className="warn">Pede confirmação: no horário o JARVIS só avisa, não executa sozinho.</p>}
+            </div>
+          )
+        })}
+      </div>
+      <p className="dim">Agendadas rodam uma vez por dia (até 3 min depois do horário) com o JARVIS aberto. Bloqueado, ele faz a cena e só cumprimenta: clima, notícias e agenda ficam para depois do rosto. Para mudar o que uma cena faz: config/permissions.json (rotina com o mesmo id).</p>
+      {msg && <p className="warn">{msg}</p>}
+    </section>
+  )
+}
+
+interface AppInfo { windows: boolean; autostart: boolean | null; hotkeys: { open: string; talk: string }; in_app: boolean }
+
+/** App do Windows: bandeja, iniciar com o Windows e atalhos globais. */
+function AppSection() {
+  const [info, setInfo] = useState<AppInfo | null>(null)
+  const [msg, setMsg] = useState('')
+  useEffect(() => { api<AppInfo>('/api/app').then(setInfo).catch((e) => setMsg((e as Error).message)) }, [])
+  const toggle = async (on: boolean) => {
+    try { const r = await api<{ ok: boolean; autostart: boolean }>('/api/app/autostart', { method: 'POST', body: JSON.stringify({ on }) }); setInfo((i) => (i ? { ...i, autostart: r.autostart } : i)); setMsg(r.autostart ? 'O JARVIS vai abrir junto com o Windows (na bandeja).' : 'Não abre mais com o Windows.') } catch (e) { setMsg((e as Error).message) }
+  }
+  return (
+    <section>
+      <h3>APP DO WINDOWS</h3>
+      {!info ? <p className="dim">{msg || 'Lendo…'}</p> : (
+        <>
+          <p className={info.in_app ? 'good' : 'dim'}>{info.in_app ? 'Rodando como app: ícone na bandeja, perto do relógio do Windows.' : 'Aberto pelo INICIAR.bat ou pelo navegador. O app fica na bandeja: JARVIS.bat ou o atalho do INSTALAR_ATALHOS.bat.'}</p>
+          {info.windows ? (
+            <label className="check"><input type="checkbox" checked={!!info.autostart} onChange={(e) => void toggle(e.target.checked)} />Iniciar com o Windows (só o ícone da bandeja; o HUD abre pelo atalho)</label>
+          ) : <p className="dim">Iniciar com o sistema e atalhos globais só existem no Windows.</p>}
+          <p className="dim">Atalhos globais: {prettyKeys(info.hotkeys.open)} abre o JARVIS · {prettyKeys(info.hotkeys.talk)} fala com ele. Troque em backend\.env (JARVIS_HOTKEY_OPEN, JARVIS_HOTKEY_TALK).</p>
+          {msg && <p className="good">{msg}</p>}
+        </>
+      )}
     </section>
   )
 }

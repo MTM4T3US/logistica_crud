@@ -8,7 +8,7 @@ import hashlib
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from .ai.base import AIError, AIProvider, ToolCall, ToolOutcome
-from .router import Plan
+from .router import Plan, _call
 from .ai.gemini_provider import GeminiProvider
 from .ai.local_provider import LocalProvider
 from .ai.persona import build_system_prompt
@@ -59,7 +59,9 @@ def claims_action(text: str) -> bool:
     return bool(_ACTION_CLAIM.search(text or ""))
 from .voice.tts import STYLES, GeminiTTS, LocalTTS, PiperTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
 
-VERSION = "0.5.3"
+VERSION = "0.6.0"
+
+SCENE_DAYS = {"todos": range(7), "dias_uteis": range(5), "fim_de_semana": (5, 6)}
 MAX_TOOL_ROUNDS = 6
 CONFIRM_TIMEOUT_S = 45.0
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -165,6 +167,7 @@ class Assistant:
         self.conns: set[Connection] = set()
         self._reminders: asyncio.Task | None = None
         self._lock_seen: set[str] = set()
+        self._scenes_done: set[str] = set()
         self._lock_wrong = 0
         # 0.5: luzes de casa Smart Life/Tuya (rede local)
         lights, self.home_note = build_lights(settings.tuya_devices or self.data_dir / "tuya" / "devices.json")
@@ -257,6 +260,7 @@ class Assistant:
             "chat_model": "", "tts_model": "", "tts_speed": 1.0, "router_mode": s.router_mode if s.router_mode in ("local_first", "ai_first") else "local_first",
             "continuous_consent": False, "barge_in": True,
             "intro_enabled": True, "intro_music_volume": 0.7, "intro_voice_delay_s": 5.0,
+            "scene_schedules": {},
         }
         saved = self.memory.get_setting("runtime", {}) or {}
         return {**defaults, **{k: v for k, v in saved.items() if k in defaults}}
@@ -279,6 +283,9 @@ class Assistant:
             "cloud_audio_consent": lambda v: isinstance(v, bool),
             "user_title": lambda v: isinstance(v, str) and 0 < len(v.strip()) <= 24,
             "intro_enabled": lambda v: isinstance(v, bool),
+            "scene_schedules": lambda v: isinstance(v, dict) and len(v) <= 20 and all(
+                isinstance(k, str) and isinstance(x, dict) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(x.get("at", "")))
+                and x.get("days", "todos") in SCENE_DAYS and isinstance(x.get("on", True), bool) for k, x in v.items()),
             "intro_music_volume": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= float(v) <= 1,
             "intro_voice_delay_s": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= float(v) <= 30,
         }
@@ -333,6 +340,10 @@ class Assistant:
             "map": self.citymap.status(),
             # com o JARVIS bloqueado, a agenda não sai do núcleo
             "agenda": self.agenda_state() if self.gate.open else None,
+            "scenes": self.scenes_state(),
+            # botões rápidos que existem neste PC (luzes = casa e/ou fita; house = há lâmpadas Tuya)
+            "quick": {"lights": self.quick_plan("luzes:on") is not None, "house": bool(self.home.lights()),
+                      "leds": self.quick_plan("fita:on") is not None, "door": self.quick_plan("porta:status") is not None},
             "home": {"note": self.home_note, "lights": [{"id": d.id, "name": d.name} for d in self.home.lights()]},
             "intro": {"music": self.intro_music() is not None, "music_name": (self.memory.get_setting("intro_music", {}) or {}).get("name", "")},
         }
@@ -343,7 +354,28 @@ class Assistant:
         return build_system_prompt(local_now(self.settings.location), title=rt["user_title"], facts=facts)
 
     # ------------------------------------------------------------------ conversa
-    async def run_turn(self, conn: Connection, text: str, source: str = "text", stt: dict[str, Any] | None = None) -> None:
+    # ------------------------------------------------------------------ botões rápidos do HUD (0.6)
+    def quick_plan(self, action: str) -> tuple[str, Plan] | None:
+        """Botões do HUD viram um plano FIXO (lista fechada, sem IA): cena, luzes, fita e porta. Passam pelas
+        mesmas ferramentas, confirmações e registros de um comando falado. Destrancar não existe aqui."""
+        tools = set(self.tools.specs())
+        first = lambda o, title: o[0].summary if o else "Sem resposta."   # noqa: E731
+        kind, _, arg = str(action or "").partition(":")
+        if kind == "cena" and arg in self.perms.routines and "run_routine" in tools:
+            r = self.perms.routines[arg]
+            return f"Cena: {r.name}", Plan("routine", [_call("run_routine", routine_id=arg)], self.router._say_routine(r.name))
+        if kind == "luzes" and arg in ("on", "off"):
+            if "house_lights" in tools:
+                return ("Acender as luzes" if arg == "on" else "Apagar as luzes"), Plan("lights", [_call("house_lights", target="todas", power=arg)], first)
+            kind = "fita"
+        if kind == "fita" and arg in ("on", "off") and "control_device" in tools and self.devices.get("leds") is not None:
+            return ("Ligar a fita de LED" if arg == "on" else "Desligar a fita de LED"), Plan("leds", [_call("control_device", device_id="leds", action=arg)], first)
+        if kind == "porta" and arg in ("status", "lock", "lockdown") and "control_device" in tools and self.devices.get("fechadura") is not None:
+            label = {"status": "Ver a porta", "lock": "Trancar a porta", "lockdown": "Modo trancado"}[arg]
+            return label, Plan("lock", [_call("control_device", device_id="fechadura", action=arg)], first)
+        return None
+
+    async def run_turn(self, conn: Connection, text: str, source: str = "text", stt: dict[str, Any] | None = None, plan: Plan | None = None) -> None:
         turn = uuid.uuid4().hex[:10]
         text = text.strip()[:4000]
         shown = text or "Jarvis"
@@ -355,8 +387,9 @@ class Assistant:
         rt = self.runtime()
         # o roteador decide ANTES da voz começar: resposta de comando local (no modo automático)
         # sai por uma voz local e não gasta pedidos do Gemini TTS
-        plan = None
-        if not text.strip():
+        if plan is not None:
+            pass                                                                  # botão do HUD: plano fixo
+        elif not text.strip():
             plan = Plan("ack", render=lambda _o, title: f"Pois não, {title}?")   # disse só "Jarvis"
         elif rt.get("router_mode", "local_first") == "local_first":
             plan = self.router.match(text)
@@ -681,6 +714,65 @@ class Assistant:
         return compose_briefing(local_now(self.settings.location), self.settings.location.city, rt["user_title"], weather, news,
                                 agenda_text=self.agenda.say_day(today), agenda=[Agenda.public(e) for e in today])
 
+    # ------------------------------------------------------------------ cenas (0.6)
+    def scene_schedules(self) -> dict[str, dict[str, Any]]:
+        """Horário de cada cena: o padrão do permissions.json, trocado pelo que foi ajustado no painel."""
+        out: dict[str, dict[str, Any]] = {}
+        for rid, r in self.perms.routines.items():
+            if r.schedule and r.schedule.get("at"):
+                out[rid] = {"at": str(r.schedule["at"]), "days": r.schedule.get("days", "todos"), "on": bool(r.schedule.get("on", True))}
+        for rid, sch in (self.runtime().get("scene_schedules") or {}).items():
+            if rid in self.perms.routines:
+                out[rid] = {"at": sch["at"], "days": sch.get("days", "todos"), "on": bool(sch.get("on", True))}
+        return out
+
+    def scenes_state(self) -> list[dict[str, Any]]:
+        sch = self.scene_schedules()
+        return [{"id": rid, "name": r.name, "icon": r.icon, "words": list(r.words), "exact": r.exact, "confirm": r.confirm,
+                 "steps": [st["tool"] for st in r.steps], "schedule": sch.get(rid)} for rid, r in self.perms.routines.items()]
+
+    async def run_scheduled_scenes(self, now: datetime | None = None) -> list[str]:
+        """Roda as cenas cujo horário chegou (janela de 3 min, uma vez por dia). Cenas que pedem confirmação
+        só avisam: sem ninguém olhando, nada que precise de "sim" acontece sozinho."""
+        now = now or self.agenda.now()
+        ran: list[str] = []
+        title = self.runtime()["user_title"]
+        for rid, sch in self.scene_schedules().items():
+            if not sch.get("on") or now.weekday() not in SCENE_DAYS.get(sch.get("days", "todos"), SCENE_DAYS["todos"]):
+                continue
+            hh, mm = (int(x) for x in sch["at"].split(":"))
+            start = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            key = f"{rid}@{now.date()}"
+            if not (start <= now < start + timedelta(minutes=3)) or key in self._scenes_done:
+                continue
+            self._scenes_done.add(key)
+            routine = self.perms.routines[rid]
+            ran.append(rid)
+            if routine.confirm:
+                await self.broadcast({"type": "reminder", "text": f"Hora da cena “{routine.name}”. Ela pede confirmação: diga “{routine.name.lower()}”."})
+                continue
+
+            async def deny(_text: str) -> bool:
+                return False
+
+            out = await self.tools.execute(ToolCall(f"cena-{rid}", "run_routine", {"routine_id": rid}), deny, self.broadcast)
+            await self.broadcast({"type": "reminder", "text": f"Cena agendada — {out.summary}"})
+            # bloqueado: só o cumprimento; o resumo (com a agenda) fica para depois da entrada
+            speech = " ".join(out.data.get("speech", [])) if self.gate.open else ""
+            conn = next((c for c in self.conns if c.turn is None or c.turn.done()), None)
+            if conn is not None and out.executed:
+                conn.turn = asyncio.create_task(self.speak_text(conn, f"cena-{uuid.uuid4().hex[:6]}", f"{routine.name}, {title}. {speech}".strip(), mode="cena"))
+        return ran
+
+    async def broadcast(self, event: dict[str, Any]) -> int:
+        """Manda um evento para todos os HUDs abertos. Devolve quantos receberam."""
+        sent = 0
+        for conn in list(self.conns):
+            with contextlib.suppress(Exception):
+                await conn.send(event)
+                sent += 1
+        return sent
+
     def agenda_state(self) -> dict[str, Any]:
         return {"today": [Agenda.public(e) for e in self.agenda.today()], "upcoming": [Agenda.public(e) for e in self.agenda.upcoming(14)]}
 
@@ -718,6 +810,8 @@ class Assistant:
         """A cada 30 s: lembretes vencidos e eventos da fechadura viram aviso no HUD e fala."""
         while True:
             await asyncio.sleep(30)
+            with contextlib.suppress(Exception):
+                await self.run_scheduled_scenes()
             with contextlib.suppress(Exception):
                 for text in await self.check_lock():
                     for conn in list(self.conns):

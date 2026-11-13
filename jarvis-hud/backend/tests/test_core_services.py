@@ -68,7 +68,9 @@ def test_permissions_example_loads_and_rejects_unsafe_entries(tmp_path: Path):
         "routines": [{"id": "ruim", "steps": [{"tool": "open_app", "args": {}}, {"tool": "run_shell", "args": {}}]}],
     }), encoding="utf-8")
     p = Permissions.load(bad)
-    assert list(p.apps) == ["ok"] and p.routines == {}
+    from app.security.permissions import DEFAULT_SCENES
+
+    assert list(p.apps) == ["ok"] and "ruim" not in p.routines and set(p.routines) == {d["id"] for d in DEFAULT_SCENES}
     assert Permissions.load(tmp_path / "nao-existe.json").apps == {}
 
 

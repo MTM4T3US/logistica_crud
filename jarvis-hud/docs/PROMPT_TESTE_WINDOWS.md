@@ -1,7 +1,7 @@
-# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.5.3
+# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.6
 
 > Cole TUDO abaixo da linha em uma sessão do Claude Code (app Claude Desktop ou terminal) aberta
-> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.5.3.zip`
+> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.6.0.zip`
 > (se a 0.3 já estava instalada: descompacte por cima, mantendo `backend\.env`, `backend\config\permissions.json` e `backend\data\`)
 > (ou clonou o branch `ccr-41dc01f1-0wlbjp` do repositório MTM4T3US/logistica_crud — a pasta é `jarvis-hud`).
 > Antes de colar: crie `jarvis-hud\backend\.env` a partir de `.env.example` e cole **você mesmo** a
@@ -9,16 +9,26 @@
 
 ---
 
-Você é o engenheiro de testes do JARVIS OS 0.5 neste computador Windows. O código foi escrito e
-testado em Linux na nuvem (testes automatizados, navegador headless com câmera falsa), mas **nada foi
-executado neste PC ainda**. Se uma sessão anterior já testou a 0.3 aqui, reaproveite o relatório dela e
-foque nas fases novas (12 a 16), repetindo só o que a atualização pode ter afetado.
+Você é o engenheiro de testes do JARVIS OS 0.6 neste computador Windows. O código foi escrito e
+testado em Linux na nuvem (testes automatizados, navegador headless com câmera falsa). As versões 0.3 a 0.5.2
+já foram testadas neste PC por sessões anteriores: reaproveite os relatórios delas e **foque nas fases novas
+(17 a 19)**, depois nas pendências da 0.5.3 (abaixo), repetindo só o que a atualização pode ter afetado.
 
 **Esta versão já inclui TODAS as suas correções** — da 0.3, da 0.4 e do teste da 0.5.2 (os patches
 `jarvis-0.4-windows.patch` e `jarvis-0.5.2-windows-teste.patch` foram aplicados; seus relatórios estão em
 `docs\RELATORIO_WINDOWS_0.3/0.4/0.5.md`). **Não reaplique patches nem refaça correções à mão.**
 
-Novidades da 0.5.3 por causa do seu relatório da 0.5.2 — confira primeiro:
+Novidades da 0.6 (fases 17 a 19):
+- **App de verdade:** `INSTALAR_ATALHOS.bat` cria o atalho JARVIS; `JARVIS.bat` abre o núcleo escondido, com
+  ícone na bandeja e o HUD numa janela própria; atalhos globais `Ctrl+Alt+J` (abrir) e `Ctrl+Alt+Espaço` (falar);
+  "Iniciar com o Windows" (registro do usuário, sem administrador).
+- **Cenas da casa:** "bom dia", "modo cinema", "modo foco", "boa noite", "estou saindo", por voz, por botão e por
+  horário (Configurações → Casa → CENAS).
+- **HUD novo:** barra do topo, coluna CENAS/CASA à direita, histórico (`L`), ajuda (`?`), Configurações em abas,
+  lembretes em destaque, tela de bloqueio com relógio.
+- "desliga o PC em 10 minutos" agora respeita o tempo (antes ignorava e usava 60 s); acima de 10 minutos ele recusa.
+
+Da 0.5.3 (correções do seu relatório da 0.5.2) — confira se ainda não testou:
 - **"seleciona tudo"/"copia" não copiavam: causa encontrada.** As letras dos atalhos iam com o código do teclado
   numérico (0x61/0x63 = Num1/Num3) em vez de 0x41/0x43. Corrigido. Repita na aba EM BRANCO do Bloco de Notas:
   "digita: teste do JARVIS" → "seleciona tudo" → "copia" e confira a área de transferência.
@@ -271,9 +281,75 @@ Leia `docs\FECHADURA.md` antes. **Regras extras:**
    - "destranca a porta": recusa.
 7. **Confirmar o que continua igual:** o app do TCC e o painel seguem funcionando fora do modo trancado.
 
+## FASE 17 — App do Windows (0.6)
+
+1. Rode `INICIAR.bat` uma vez (instala `pystray` e `pillow`, novas dependências) e feche.
+2. `INSTALAR_ATALHOS.bat`: confira o atalho **JARVIS** na Área de Trabalho e no Menu Iniciar. Responda **N** à
+   pergunta de iniciar com o Windows por enquanto.
+3. Abra pelo atalho. Confira e registre:
+   - sem janela de console;
+   - ícone na bandeja;
+   - o HUD numa janela própria, sem barra de endereço, com o título "JARVIS OS";
+   - `backend\data\jarvis.log` sendo escrito.
+4. Clique duas vezes no atalho de novo: **não** pode subir um segundo núcleo (a janela existente vem para a
+   frente). Verifique no Gerenciador de Tarefas: só um `pythonw`.
+5. Atalhos globais, com outro programa em foco (ex.: Bloco de Notas):
+   - `Ctrl+Alt+J` traz o HUD;
+   - `Ctrl+Alt+Espaço` começa a gravar (o HUD mostra MICROFONE CAPTURANDO).
+
+   Se algum atalho já for usado por outro programa, o log diz qual; troque em `backend\.env`
+   (`JARVIS_HOTKEY_OPEN` / `JARVIS_HOTKEY_TALK`) e repita.
+6. Menu da bandeja: Abrir, Falar, Bloquear o JARVIS (com rosto cadastrado), Abrir a pasta de dados, Ver o
+   registro, Sair. **Sair** encerra tudo: nenhum `pythonw` sobrando e a porta 8765 livre.
+7. **Iniciar com o Windows**, pelo menu da bandeja **e** por Configurações → Sistema:
+   - ligar e conferir em `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` o valor "JARVIS" (só leitura,
+     com `reg query`);
+   - desligar e conferir que o valor sumiu.
+
+   **Só reinicie o PC para testar se o usuário autorizar.** Ao iniciar, deve aparecer só o ícone, sem abrir o HUD.
+8. Navegador: o app usa Edge, Chrome ou Brave, nessa ordem, com um perfil próprio em `%LOCALAPPDATA%\JARVIS\navegador`.
+   Confira que a música de entrada toca sem precisar clicar antes.
+
+## FASE 18 — Cenas da casa (0.6)
+
+Para cada cena, por voz ou texto **e** pelo botão em CENAS:
+1. "modo cinema": casa apagada (se houver Tuya), fita em modo cinema, volume 35. Confira a resposta: se ele pulou
+   uma etapa por falta de recurso, deve dizer quantas.
+2. "modo foco" e "boa noite": confira cada etapa real; "boa noite" tranca a porta só se a fechadura estiver
+   pareada (senão: simulador).
+3. "bom dia" (sozinho): faz a cena e fala o resumo. "bom dia, que horas são?": **só** diz a hora, sem a cena.
+4. "estou saindo": pede confirmação; recuse uma vez (nada acontece) e aceite outra.
+   **Ela bloqueia o Windows**: avise o usuário antes.
+5. Horário: em Configurações → Casa → CENAS, agende "modo foco" para daqui a 2 minutos. Espere com o JARVIS
+   aberto e confira:
+   - roda uma vez;
+   - aparece um aviso em destaque no topo;
+   - entra no histórico (`L`).
+
+   Depois desligue o agendamento.
+6. Agende "estou saindo" para daqui a 2 minutos: no horário ele só deve **avisar** (não executar).
+   Depois desligue o agendamento.
+7. Bloqueado (com rosto cadastrado): agende "bom dia". No horário, ele deve fazer a cena e só cumprimentar, sem
+   falar clima, notícias nem agenda.
+8. Botões CASA: Acender/Apagar (com Tuya: casa + fita; sem Tuya: só a fita), "Porta?", Trancar. **Não use
+   "Trancado" (modo trancado) sem o usuário por perto e de acordo.**
+
+## FASE 19 — HUD novo (0.6)
+
+1. Capturas em 1920×1080 e numa janela menor (~1000 px de largura) em repouso. Confira:
+   - nada cortado na borda esquerda;
+   - coluna CENAS/CASA legível;
+   - a barra de comando não fica esmagada.
+2. `L` abre o histórico com a conversa e os avisos (horário de Itumbiara); `?` abre a ajuda; `Esc` fecha os dois.
+3. Configurações: percorra as 6 abas. Confira que a escuta contínua, o cadastro de rosto, a agenda e as vozes
+   continuam funcionando nas novas abas.
+4. Tela de bloqueio: relógio e data de Itumbiara; entrar pelo rosto e pelo PIN.
+5. Meça o FPS em repouso (Configurações → Sistema → Medir 30 s) e compare com a 0.5. A coluna nova não deve
+   derrubar o FPS.
+
 ## Entrega
 
-Crie `jarvis-hud\docs\RELATORIO_WINDOWS_0.5.3.md` com:
+Crie `jarvis-hud\docs\RELATORIO_WINDOWS_0.6.md` com:
 
 1. Tabela por item: Fase · Teste · Status (REAL-OK / REAL-FALHOU / SÓ-API / SIMULADO / NÃO-TESTADO) · Evidência.
 2. Problemas encontrados e correções aplicadas (arquivo e motivo).

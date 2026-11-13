@@ -45,13 +45,21 @@ export interface CoreState {
   map?: { ready: boolean; city: string; counts?: Record<string, number>; attribution?: string }
   agenda?: AgendaData | null
   home?: { note: string; lights: { id: string; name: string }[] }
+  /** 0.6: cenas da casa (prontas + as do permissions.json) e o horário de cada uma */
+  scenes?: SceneData[]
+  /** 0.6: botões rápidos que existem neste PC */
+  quick?: { lights: boolean; house: boolean; leds: boolean; door: boolean }
 }
+export interface SceneSchedule { at: string; days: 'todos' | 'dias_uteis' | 'fim_de_semana'; on: boolean }
+export interface SceneData { id: string; name: string; icon: string; words: string[]; exact: boolean; confirm: boolean; steps: string[]; schedule: SceneSchedule | null }
+/** Histórico do que aconteceu (avisos, lembretes, falhas e ações), para a gaveta "Histórico". */
+export interface FeedItem { id: number; ts: number; kind: 'aviso' | 'lembrete' | 'erro' | 'acao'; text: string; ok?: boolean }
 export interface AgendaEvent { id: number; title: string; start: string; all_day: boolean; place: string; repeat: string; remind_min: number; duration_min: number }
 export interface AgendaData { today: AgendaEvent[]; upcoming: AgendaEvent[] }
 export interface FaceGateState { enrolled: boolean; enabled: boolean; active: boolean; unlocked: boolean; pin_set: boolean; threshold: number; liveness: string; samples: number; cooldown_s: number; antispoof_min: number }
 export interface Briefing { welcome: string; briefing: string; city: string; weather: Record<string, unknown> | null; headlines: { title: string; source: string; region: string; link: string }[] }
-export interface Line { id: number; role: 'user' | 'assistant'; text: string; source?: string; partial?: boolean; mode?: string; interrupted?: boolean }
-export interface ToolEntry { id: string; name: string; label: string; stage: 'start' | 'end'; ok?: boolean; executed?: boolean; simulated?: boolean; summary?: string; ts: number }
+export interface Line { id: number; role: 'user' | 'assistant'; text: string; source?: string; partial?: boolean; mode?: string; interrupted?: boolean; ts?: number }
+export interface ToolEntry { id: string; name: string; label: string; stage: 'start' | 'end'; ok?: boolean; executed?: boolean; simulated?: boolean; summary?: string; ts: number; args?: Record<string, unknown> }
 export interface NewsData { ok: boolean; source?: string; items: { title: string; link: string; published: string; source?: string; region?: string }[] }
 
 type Conn = 'offline' | 'connecting' | 'online'
@@ -87,13 +95,19 @@ interface JarvisState {
   computer: { task: string; step: number; desc: string } | null
   /** agenda local (só chega com o JARVIS liberado) */
   agenda: AgendaData | null
+  /** histórico de avisos e ações desta sessão (o mais novo no fim) */
+  feed: FeedItem[]
+  /** lembrete em destaque no topo */
+  toast: { text: string; ts: number } | null
+  drawer: boolean
+  help: boolean
   set: (patch: Partial<JarvisState>) => void
 }
 
 export const useJarvis = create<JarvisState>((set) => ({
   conn: 'connecting', core: null, busy: false, activity: '', lines: [], tools: [], weather: null, system: null, devices: [], news: null,
   error: null, notice: null, confirm: null, mic: 'off', wake: false, consentAsk: false, continuousAsk: false, settingsOpen: false,
-  locked: false, briefing: null, cityMap: null, computer: null, agenda: null,
+  locked: false, briefing: null, cityMap: null, computer: null, agenda: null, feed: [], toast: null, drawer: false, help: false,
   set: (patch) => set(patch),
 }))
 
@@ -102,6 +116,8 @@ export const bridge = {
   send: (_msg: Record<string, unknown>) => false as boolean,
   fetchMusic: async (): Promise<ArrayBuffer | null> => null,
   fetchMap: async (_quiet: boolean): Promise<CityData | null> => null,
+  /** atalho global "falar" do app da bandeja */
+  talk: () => {},
 }
 
 let mapLoading = false
@@ -156,6 +172,14 @@ window.setInterval(() => {
 }, 120)
 
 let lineId = 0
+let feedId = 0
+/** Guarda no histórico (máx. 80 itens). Repetições seguidas do mesmo texto não duplicam. */
+export function log(kind: FeedItem['kind'], text: string, ok?: boolean) {
+  const feed = J().feed
+  const last = feed[feed.length - 1]
+  if (last && last.text === text && last.kind === kind && Date.now() - last.ts < 4000) return
+  useJarvis.setState({ feed: [...feed, { id: ++feedId, ts: Date.now(), kind, text, ok }].slice(-80) })
+}
 let mapHold = 0
 let gotAudio = false
 const hud = () => useStore.getState()
@@ -238,6 +262,7 @@ export function handleEvent(ev: Record<string, any>) {
       break
     case 'locked':
       useJarvis.setState({ notice: { message: ev.message, ts: now } })
+      log('aviso', ev.message)
       break
     case 'phase':
       if (ev.phase === 'thinking' || ev.phase === 'transcribing') {
@@ -250,18 +275,20 @@ export function handleEvent(ev: Record<string, any>) {
       break
     case 'transcript':
       gotAudio = false
-      useJarvis.setState({ lines: [...J().lines, { id: ++lineId, role: 'user', text: ev.text, source: ev.source } as Line].slice(-40), tools: J().tools.filter((t) => now - t.ts < 90_000) })
+      useJarvis.setState({ lines: [...J().lines, { id: ++lineId, role: 'user', text: ev.text, source: ev.source, ts: now } as Line].slice(-40), tools: J().tools.filter((t) => now - t.ts < 90_000) })
       break
     case 'delta': {
       const last = J().lines[J().lines.length - 1]
       if (last?.role === 'assistant' && last.partial) patchLast('assistant', (l) => ({ ...l, text: l.text + ev.text }))
-      else useJarvis.setState({ lines: [...J().lines, { id: ++lineId, role: 'assistant', text: ev.text, partial: true } as Line].slice(-40) })
+      else useJarvis.setState({ lines: [...J().lines, { id: ++lineId, role: 'assistant', text: ev.text, partial: true, ts: now } as Line].slice(-40) })
       break
     }
     case 'tool': {
-      const entry: ToolEntry = { id: ev.id, name: ev.name, label: ev.label, stage: ev.stage, ok: ev.ok, executed: ev.executed, simulated: ev.simulated, summary: ev.summary, ts: now }
+      const prev = J().tools.find((t) => t.id === ev.id)
+      const entry: ToolEntry = { id: ev.id, name: ev.name, label: ev.label, stage: ev.stage, ok: ev.ok, executed: ev.executed, simulated: ev.simulated, summary: ev.summary, ts: now, args: ev.args ?? prev?.args }
       const rest = J().tools.filter((t) => t.id !== ev.id)
       useJarvis.setState({ tools: [...rest, entry].slice(-6) })
+      if (ev.stage === 'end') log('acao', `${ev.label}${ev.simulated ? ' (simulador)' : ''}: ${ev.summary ?? ''}`, !!ev.executed)
       break
     }
     case 'audio':
@@ -295,9 +322,11 @@ export function handleEvent(ev: Record<string, any>) {
     case 'error':
       liveAudio.errorUntil = performance.now() / 1000 + 2.8
       useJarvis.setState({ error: { message: ev.message, scope: ev.scope, code: ev.code, ts: now }, consentAsk: ev.code === 'consent_required' ? true : J().consentAsk })
+      log('erro', ev.message)
       break
     case 'notice':
       useJarvis.setState({ notice: { message: ev.message, ts: now } })
+      log('aviso', ev.message)
       break
     case 'stt_empty':
       useJarvis.setState({ notice: { message: 'Não ouvi nenhuma fala. Tente de novo ou digite o comando.', ts: now } })
@@ -332,7 +361,9 @@ export function handleEvent(ev: Record<string, any>) {
       useJarvis.setState({ agenda: ev.agenda })
       break
     case 'reminder':
-      useJarvis.setState({ notice: { message: '⏰ ' + ev.text, ts: now } })
+      // lembretes, cenas agendadas e avisos da fechadura: destaque no topo + histórico
+      useJarvis.setState({ toast: { text: ev.text, ts: now } })
+      log('lembrete', ev.text)
       break
     case 'computer':
       if (ev.stage === 'start') useJarvis.setState({ computer: { task: ev.task, step: 0, desc: '' } })
@@ -347,6 +378,7 @@ export function handleEvent(ev: Record<string, any>) {
         if (ev.at_turn) mapTurn = ev.at_turn
         else show('map')
       } else if (ev.action === 'intro_done') introDone = true
+      else if (ev.action === 'talk' && !J().locked) bridge.talk()
       break
   }
 }
@@ -357,4 +389,5 @@ window.setInterval(() => {
   const now = Date.now()
   if (s.error && now - s.error.ts > 9000) useJarvis.setState({ error: null })
   if (s.notice && now - s.notice.ts > 6000) useJarvis.setState({ notice: null })
+  if (s.toast && now - s.toast.ts > 14000) useJarvis.setState({ toast: null })
 }, 1000)

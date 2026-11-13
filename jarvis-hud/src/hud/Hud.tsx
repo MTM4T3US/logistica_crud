@@ -8,6 +8,10 @@ import { answerConfirm, cancelFace, interrupt, saveSettings, sendPin, sendText, 
 import { useFace } from '../core/face'
 import { rig } from '../state/rig'
 import { Settings } from './Settings'
+import { Dock, Drawer, Help, Toast, TopActions } from './Panels'
+
+/** "0.6.0" → "0.6" (o núcleo informa a versão; sem núcleo, a do HUD). */
+export const useVersion = () => (useJarvis((s) => s.core?.version) ?? '0.6').split('.').slice(0, 2).join('.')
 
 /** Re-renderiza o HUD ~20×/s (relógio, legendas, porcentagens). */
 function useTick(hz = 20) {
@@ -24,10 +28,12 @@ function Badge() {
   const conn = useJarvis((s) => s.conn)
   const ai = useJarvis((s) => s.core?.ai)
   const demo = useStore((s) => s.demo)
+  const ver = useVersion()
   const where = conn === 'online' ? (ai?.mode === 'ai' ? `NÚCLEO ONLINE · IA ${ai.provider.toUpperCase()}` : 'NÚCLEO ONLINE · MODO LOCAL (SEM IA)') : conn === 'connecting' ? 'CONECTANDO AO NÚCLEO…' : 'NÚCLEO OFFLINE'
   return (
     <div className="badge">
-      JARVIS OS 0.5 · {where}
+      <i className={`dot ${conn} ${ai?.mode === 'ai' ? 'ai' : ''}`} aria-hidden />
+      <b>JARVIS OS {ver}</b> · {where}
       {demo && <b className="demo">DEMO · DADOS SIMULADOS</b>}
     </div>
   )
@@ -279,6 +285,7 @@ function deviceText(d: DeviceData): string {
 /** Estado dos dispositivos planejados. Nesta versão são simuladores: nenhum hardware está conectado. */
 function Devices() {
   const devices = useJarvis((s) => s.devices)
+  const lights = useJarvis((s) => s.core?.home?.lights)
   if (!devices.length) return null
   return (
     <div className="devices">
@@ -286,6 +293,7 @@ function Devices() {
       {devices.map((d) => (
         <div className="dev" key={d.id}><i className={d.connected ? 'on' : ''} />{d.name}{!d.simulated && <em> REAL</em>}<span>{deviceText(d)}</span></div>
       ))}
+      {!!lights?.length && <div className="dev-note">LUZES DE CASA · {lights.length} · {lights.map((l) => l.name).join(' · ')}</div>}
     </div>
   )
 }
@@ -381,6 +389,12 @@ function LiveFacePanels() {
 /** Bloqueio: o JARVIS só abre com o rosto cadastrado (ou o PIN reserva). */
 function LockScreen() {
   const f = useFace()
+  const ver = useVersion()
+  const tz = useJarvis((s) => s.core?.location.timezone) ?? 'America/Sao_Paulo'
+  const city = useJarvis((s) => s.core?.location.city) ?? 'Itumbiara'
+  const d = new Date()
+  const time = new Intl.DateTimeFormat('pt-BR', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(d)
+  const date = new Intl.DateTimeFormat('pt-BR', { timeZone: tz, weekday: 'long', day: '2-digit', month: 'long' }).format(d)
   const pinSet = useJarvis((s) => s.core?.face?.pin_set)
   const [pinOpen, setPinOpen] = useState(false)
   const [pin, setPin] = useState('')
@@ -395,7 +409,9 @@ function LockScreen() {
     <div className={`lock ${idle ? 'full' : 'mini'}`}>
       {idle && (
         <>
-          <div className="lock-kicker">JARVIS OS 0.5</div>
+          <div className="lock-time">{time}</div>
+          <div className="lock-date">{date} · {city}</div>
+          <div className="lock-kicker">JARVIS OS {ver}</div>
           <div className="lock-title">IDENTIFICAÇÃO NECESSÁRIA</div>
           {f.phase === 'error' && <div className="chip err">{f.message}</div>}
           <button className="lock-go" onClick={startFaceCheck} autoFocus>INICIAR RECONHECIMENTO</button>
@@ -473,7 +489,7 @@ function CommandBar() {
         <div className="log" aria-live="polite">
           {lines.map((l) => (
             <p key={l.id} className={l.role}>
-              <b>{l.role === 'user' ? (l.source === 'text' ? 'VOCÊ' : 'VOCÊ · VOZ') : l.mode === 'local' ? 'JARVIS · LOCAL' : 'JARVIS'}</b>
+              <b>{l.role === 'user' ? (l.source === 'text' ? 'VOCÊ' : l.source === 'botão' ? 'VOCÊ · BOTÃO' : 'VOCÊ · VOZ') : l.mode === 'local' ? 'JARVIS · LOCAL' : 'JARVIS'}</b>
               {l.text}{l.interrupted && <em> (interrompido)</em>}
             </p>
           ))}
@@ -530,7 +546,11 @@ function useKeys() {
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName
-      if (e.key === 'Escape') { interrupt(); useJarvis.setState({ settingsOpen: false }); return }
+      if (e.key === 'Escape') {
+        const j = useJarvis.getState()
+        if (j.help || j.drawer) return useJarvis.setState({ help: false, drawer: false })
+        interrupt(); useJarvis.setState({ settingsOpen: false }); return
+      }
       if (e.ctrlKey && e.key.toLowerCase() === 'm') { e.preventDefault(); setMuted(useJarvis.getState().mic !== 'muted'); return }
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || e.ctrlKey || e.metaKey || e.altKey) return
       const s = useStore.getState()
@@ -538,6 +558,8 @@ function useKeys() {
       if (i >= 0 && i < MODES.length) { s.setSequence(false); s.setMode(DEMO_STATES[i][0]) }
       const k = e.key.toLowerCase()
       if (k === 'h') s.toggleUi()
+      if (k === 'l') useJarvis.setState({ drawer: !useJarvis.getState().drawer })
+      if (e.key === '?') useJarvis.setState({ help: !useJarvis.getState().help })
       if (k === 'd') s.setSequence(!s.sequence)
       if (k === 'm') void toggleTalk()
       if (k === 'f') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()
@@ -568,8 +590,11 @@ export function Hud() {
   const stage = !inMap && mode !== 'face'
   return (
     <div className={`hud mode-${mode} ${real ? 'live' : ''}`}>
-      <Badge />
-      <Tabs />
+      <header className="topbar">
+        <Badge />
+        <div className="tb-right"><Tabs /><TopActions /></div>
+      </header>
+      <Toast />
       <div className={`corner ${inMap ? 'away' : ''}`}>
         <Clock />
         <Status mode={mode} modeT={modeT} />
@@ -586,13 +611,15 @@ export function Hud() {
       {/* modo real: clima de fonte real e estado dos dispositivos à esquerda */}
       <div className={`cards pinned ${online && stage ? 'show' : ''}`}><div className="side"><WeatherCard data={weather} /><AgendaCard /><Devices /></div></div>
       <div className={`cards ${real && inMap ? 'show' : ''}`}><WeatherCard big data={weather} /><NewsCard /></div>
-      {real && stage && <ToolLog />}
+      <div className={`cards pinned ${real && stage && !locked ? 'show' : ''}`}><div className="rside"><Dock /><ToolLog /></div></div>
 
       {inMap && (useJarvis.getState().cityMap && !demo
         ? <div className="mapnote">{useJarvis.getState().cityMap!.city.toUpperCase()} · MAPA REAL · {useJarvis.getState().cityMap!.attribution.toUpperCase()} · PRÉDIOS SÓ ONDE MAPEADOS, ALTURA EXAGERADA</div>
         : <div className="mapnote">CENA DE MAPA 3D · <b className="demo">DEMONSTRAÇÃO</b> CIDADE FICTÍCIA — NÃO REPRESENTA {(useJarvis.getState().core?.location.city ?? 'Itumbiara').toUpperCase()}</div>)}
       {ui && !locked && !enrolling && <CommandBar />}
       {ui && settingsOpen && !locked && <Settings />}
+      {ui && !locked && <Drawer />}
+      <Help />
     </div>
   )
 }

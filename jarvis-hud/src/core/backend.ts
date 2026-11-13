@@ -78,6 +78,7 @@ export function startBackend() {
     return null
   }
   faceCam.configure(send)
+  bridge.talk = () => { void toggleTalk() }
   void connect()
 }
 
@@ -91,6 +92,13 @@ export function sendText(text: string): boolean {
   audio.unlock()
   audio.stop()
   return send({ type: 'user_text', text })
+}
+
+/** Botão rápido do HUD (cena, luzes, fita, porta): o núcleo executa um plano fixo, sem IA. */
+export function quickAction(action: string): boolean {
+  audio.unlock()
+  audio.stop()
+  return send({ type: 'quick', action })
 }
 
 export function interrupt() {

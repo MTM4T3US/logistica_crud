@@ -10,6 +10,7 @@ import base64
 import os
 import binascii
 import contextlib
+import sys
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any
@@ -218,6 +219,54 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
                 await c.send({"type": "agenda", "agenda": core.agenda_state()})
         return {"ok": ok}
 
+    @app.post("/api/hud/{action}")
+    async def hud_action(action: str) -> dict[str, Any]:
+        """Usado pelo app da bandeja: atalho global "falar" e o item "Bloquear o JARVIS"."""
+        if action == "talk":
+            sent = await core.broadcast({"type": "ui", "action": "talk"})
+            return {"ok": sent > 0, "hud": sent}
+        if action == "lock":
+            if not core.gate.active:
+                return {"ok": False, "message": "Cadastre o rosto (Configurações → Entrada por rosto) para poder bloquear."}
+            core.gate.lock()
+            await core.broadcast({"type": "state", "state": await core.state()})
+            return {"ok": True}
+        raise HTTPException(status_code=400, detail={"message": "Ação desconhecida."})
+
+    # ------------------------------------------------------------------ app do Windows (0.6)
+    app.state.winreg = None   # testes trocam pelo registro falso
+
+    def _windows() -> bool:
+        return sys.platform == "win32" or app.state.winreg is not None
+
+    @app.get("/api/app")
+    async def app_info() -> dict[str, Any]:
+        from . import desktop_app
+
+        auto = None
+        if _windows():
+            with contextlib.suppress(Exception):
+                auto = await asyncio.to_thread(desktop_app.is_autostart, app.state.winreg)
+        return {"windows": _windows(), "autostart": auto, "hotkeys": desktop_app.hotkeys(), "in_app": os.environ.get("JARVIS_APP") == "1"}
+
+    @app.post("/api/app/autostart")
+    async def app_autostart(body: dict[str, Any]) -> dict[str, Any]:
+        """Liga/desliga "iniciar com o Windows". O comando gravado é sempre o mesmo (pythonw + jarvis_app.pyw);
+        nada do pedido entra no registro além de ligar ou desligar."""
+        from . import desktop_app
+
+        if not _windows():
+            raise HTTPException(status_code=400, detail={"message": "Iniciar com o sistema só existe no Windows."})
+        on = body.get("on")
+        if not isinstance(on, bool):
+            raise HTTPException(status_code=400, detail={"message": "Informe on: true ou false."})
+        try:
+            await asyncio.to_thread(desktop_app.set_autostart, on, app.state.winreg)
+            now = await asyncio.to_thread(desktop_app.is_autostart, app.state.winreg)
+        except OSError as err:
+            raise HTTPException(status_code=500, detail={"message": f"O Windows recusou: {err}"}) from err
+        return {"ok": now == on, "autostart": now}
+
     @app.get("/api/briefing")
     async def briefing() -> dict[str, Any]:
         return await core.briefing()
@@ -272,6 +321,13 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
                     if text:
                         await conn.cancel_turn()
                         conn.turn = asyncio.create_task(core.run_turn(conn, text, "text"))
+                elif kind == "quick":
+                    found = core.quick_plan(str(msg.get("action", ""))[:60])
+                    if found is None:
+                        await conn.send({"type": "notice", "message": "Esse botão não está disponível neste computador."})
+                        continue
+                    await conn.cancel_turn()
+                    conn.turn = asyncio.create_task(core.run_turn(conn, found[0], "botão", plan=found[1]))
                 elif kind == "user_audio":
                     raw = msg.get("wav", "")
                     if not isinstance(raw, str) or len(raw) > MAX_AUDIO_BYTES * 4 // 3 + 8:

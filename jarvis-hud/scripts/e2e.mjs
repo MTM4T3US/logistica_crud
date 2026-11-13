@@ -1,4 +1,4 @@
-// Demonstração verificável do JARVIS OS 0.2 em um navegador real (Chromium headless).
+// Demonstração verificável do JARVIS OS (0.2 → 0.6) em um navegador real (Chromium headless).
 // Exige o backend rodando com o HUD compilado:  npm run build  →  (backend) python -m app.main
 // Uso:  npm run e2e            (grava capturas em evidence/0.2 e sai com código ≠ 0 se algo falhar)
 //
@@ -158,6 +158,7 @@ try {
   if (s.ai && micFile) {
     await page.click('.cmd-row .icon:last-child')
     await page.waitForSelector('.settings')
+    await page.click('.stabs button:has-text("VOZ")')
     const wakeBox = page.locator('.settings label.check', { hasText: 'Escuta contínua' }).locator('input')
     check('Escuta contínua desligada por padrão', !(await wakeBox.isChecked()))
     await page.click('.settings header button')
@@ -183,8 +184,24 @@ try {
   // --- configurações
   await page.click('.cmd-row .icon:last-child')
   await page.waitForSelector('.settings')
-  const sections = await page.evaluate(() => [...document.querySelectorAll('.settings h3')].map((e) => e.firstChild.textContent.trim()))
-  check('Configurações: IA, voz, microfone, privacidade, desempenho', ['IA', 'VOZ', 'MICROFONE', 'PRIVACIDADE', 'DESEMPENHO'].every((x) => sections.includes(x)), sections.join(', '))
+  const sections = []
+  for (const tab of await page.$$eval('.stabs button', (bs) => bs.map((b) => b.textContent))) {
+    await page.click(`.stabs button:has-text("${tab}")`)
+    await page.waitForTimeout(150)
+    sections.push(...await page.evaluate(() => [...document.querySelectorAll('.settings h3')].map((e) => e.firstChild.textContent.trim())))
+  }
+  check('Configurações (em abas): IA, voz, microfone, privacidade, cenas, desempenho', ['IA', 'VOZ', 'MICROFONE', 'PRIVACIDADE', 'CENAS', 'DESEMPENHO'].every((x) => sections.includes(x)), sections.join(', '))
+  await page.click('.settings header button')
+  // 0.6: botão de cena → plano fixo no núcleo, com a mesma confirmação de um comando falado
+  const scenes = await page.$$eval('.dock .scn', (bs) => bs.map((b) => b.textContent))
+  check('Controle rápido com as cenas da casa', scenes.length >= 5, scenes.join(' | '))
+  await page.click('.dock .scn:has-text("Foco")')
+  await page.waitForFunction(() => [...document.querySelectorAll('.cmd .log p')].some((p) => /^JARVIS/.test(p.textContent) && /Modo foco/.test(p.textContent)), null, { timeout: 30000 }).catch(() => {})
+  const after = (await read()).log
+  check('Botão de cena executa sem IA e responde', after.some((l) => /BOTÃO.*Modo foco/.test(l)) && after.some((l) => /Modo foco/.test(l) && /^JARVIS/.test(l)), after.slice(-2).join(' ⏎ '))
+  await page.keyboard.press('?')
+  check('Ajuda abre pelo teclado (?)', await page.isVisible('.modal .help-grid'))
+  await page.keyboard.press('Escape')
   await shot('06-configuracoes')
   check('Sem erros de JavaScript na página', pageErrors.length === 0, pageErrors.join(' | '))
 } catch (err) {
