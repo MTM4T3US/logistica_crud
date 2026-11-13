@@ -91,9 +91,9 @@ export function Space({ detail }: { detail: number }) {
               float d = length(f - rp);
               float on = step(o == 0 ? .2 : (o == 1 ? .45 : .82), hash31(id + 5.3));
               float tw = .8 + .2 * sin(uTime * (1. + 3. * hash31(id)) + 6.28 * hash31(id + 2.));
-              float core = smoothstep(o == 2 ? .12 : .2, 0., d);
-              float glowD = o == 2 ? smoothstep(.42, 0., d) * .22 : 0.;
-              acc += on * tw * (core * (o == 2 ? 2.6 : 1.25) + glowD) * (.45 + hash31(id + 1.7));
+              float core = smoothstep(o == 2 ? .065 : .16, 0., d);
+              float glowD = o == 2 ? smoothstep(.3, 0., d) * .12 : 0.;
+              acc += on * tw * (core * (o == 2 ? 2.2 : 1.35) + glowD) * (.45 + hash31(id + 1.7));
             }
             return acc * min(mask, 1.6);
           }

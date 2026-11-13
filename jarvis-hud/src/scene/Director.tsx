@@ -18,7 +18,7 @@ export const MAP_SPEECH_DELAY = 5.5
 
 /** Atualiza o `rig` (transições entre estados) e dirige a câmera. Não renderiza nada. */
 export function Director() {
-  const fps = useRef({ frames: 0, t0: now() })
+  const fps = useRef({ frames: 0, t0: now(), bad: 0 })
   const haze = useRef<HTMLElement | null>(null)
   useFrame(({ camera }, dtRaw) => {
     const dt = Math.min(dtRaw, 0.1)
@@ -116,7 +116,11 @@ export function Director() {
       const rate = f.frames / (t - f.t0)
       f.frames = 0; f.t0 = t
       ;(window as unknown as { __fps: number }).__fps = rate
-      if (s.autoQuality && rate < 27 && document.visibilityState === 'visible') {
+      // janela escondida, minimizada ou sem foco desacelera o navegador: não vale como medida
+      const watching = document.visibilityState === 'visible' && document.hasFocus()
+      f.bad = s.autoQuality && watching && rate < 24 ? f.bad + 1 : 0
+      if (f.bad >= 2) {
+        f.bad = 0
         if (s.quality === 'high') s.setQuality('medium', true)
         else if (s.quality === 'medium') s.setQuality('low', true)
       }

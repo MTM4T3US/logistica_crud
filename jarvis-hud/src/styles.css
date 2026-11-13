@@ -440,3 +440,8 @@ kbd { display: inline-block; font: 700 11px/1 'Orbitron', sans-serif; letter-spa
 @media (prefers-reduced-motion: reduce) {
   .scn.run, .badge .dot.connecting, .toast, .drawer, .modal-in { animation: none; }
 }
+
+/* 0.6.1: nota do mapa no canto inferior esquerdo (livre no mapa), sem cobrir os nomes da cidade */
+.mapnote { left: calc(var(--u) * 2.2); top: auto; bottom: calc(var(--u) * 2.2); transform: none; max-width: min(34vw, 460px); white-space: normal;
+  font-size: max(8.5px, calc(var(--u) * .95)); line-height: 1.6; letter-spacing: .14em; border-left: 2px solid var(--cy); border-top: 0; border-right: 0; border-bottom: 0; }
+@media (max-width: 900px) { .mapnote { bottom: 78px; max-width: 70vw; } }

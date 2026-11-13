@@ -1,7 +1,7 @@
-# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.6
+# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.6.1
 
 > Cole TUDO abaixo da linha em uma sessão do Claude Code (app Claude Desktop ou terminal) aberta
-> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.6.0.zip`
+> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.6.1.zip`
 > (se a 0.3 já estava instalada: descompacte por cima, mantendo `backend\.env`, `backend\config\permissions.json` e `backend\data\`)
 > (ou clonou o branch `ccr-41dc01f1-0wlbjp` do repositório MTM4T3US/logistica_crud — a pasta é `jarvis-hud`).
 > Antes de colar: crie `jarvis-hud\backend\.env` a partir de `.env.example` e cole **você mesmo** a
@@ -12,11 +12,17 @@
 Você é o engenheiro de testes do JARVIS OS 0.6 neste computador Windows. O código foi escrito e
 testado em Linux na nuvem (testes automatizados, navegador headless com câmera falsa). As versões 0.3 a 0.5.2
 já foram testadas neste PC por sessões anteriores: reaproveite os relatórios delas e **foque nas fases novas
-(17 a 19)**, depois nas pendências da 0.5.3 (abaixo), repetindo só o que a atualização pode ter afetado.
+(17 a 20)**, depois nas pendências da 0.5.3 (abaixo), repetindo só o que a atualização pode ter afetado.
 
 **Esta versão já inclui TODAS as suas correções** — da 0.3, da 0.4 e do teste da 0.5.2 (os patches
 `jarvis-0.4-windows.patch` e `jarvis-0.5.2-windows-teste.patch` foram aplicados; seus relatórios estão em
 `docs\RELATORIO_WINDOWS_0.3/0.4/0.5.md`). **Não reaplique patches nem refaça correções à mão.**
+
+Novidades da 0.6.1 (fase 20) — confira primeiro:
+- **Entrada só pelo rosto:** não pede mais piscada (opção em Configurações → Entrada); câmera automática opcional.
+- **Cidade redesenhada:** ruas de asfalto, casas ilustrativas nas quadras, prédios mapeados com contorno, árvores, rio,
+  carros, nomes dos pontos de referência.
+- **Qualidade:** antisserrilhado no perfil médio; a qualidade automática não cai mais com a janela escondida.
 
 Novidades da 0.6 (fases 17 a 19):
 - **App de verdade:** `INSTALAR_ATALHOS.bat` cria o atalho JARVIS; `JARVIS.bat` abre o núcleo escondido, com
@@ -346,6 +352,29 @@ Para cada cena, por voz ou texto **e** pelo botão em CENAS:
 4. Tela de bloqueio: relógio e data de Itumbiara; entrar pelo rosto e pelo PIN.
 5. Meça o FPS em repouso (Configurações → Sistema → Medir 30 s) e compare com a 0.5. A coluna nova não deve
    derrubar o FPS.
+
+## FASE 20 — 0.6.1: rosto, cidade e qualidade
+
+1. **Entrada só pelo rosto** (com o usuário na frente da câmera):
+   - entrar **sem piscar**, cinco vezes; anote correspondência e tempo até entrar;
+   - outra pessoa da casa, se o usuário quiser, sem piscar: **não pode** entrar;
+   - **uma foto do usuário no celular**, mostrada para a câmera: anote se entra (esperado: pode entrar, por isso
+     existe a opção da piscada). Conte isso ao usuário;
+   - ligue "Ligar a câmera sozinho" e bloqueie: a câmera deve ligar sem clique;
+   - desmarque "Entrar só pelo rosto": deve voltar a pedir a piscada. Deixe como o usuário preferir.
+2. **Cidade real:**
+   - "mostra o mapa", com a Itumbiara baixada (se não estiver: `backend\.venv\Scripts\python
+     backend\scripts\baixar_mapa.py`);
+   - capturas em 1920×1080 aos ~10 s e ~25 s;
+   - pergunte ao usuário se reconhece o centro, o rio e as avenidas;
+   - confira se há casas em cima de rua ou dentro do rio (não deveria);
+   - no console do HUD (F12), leia `__city` (tempo de montagem e quantidades).
+3. **Qualidade:**
+   - Configurações → Sistema: qualidade em "Automática". Use 2 min com o HUD em primeiro plano e confira se continua
+     "medium";
+   - esconda a janela por 1 min e volte: **não** deve ter caído para "low";
+   - meça o FPS em 1080p no repouso e no mapa (Medir 30 s), em "Média" e em "Alta";
+   - recomende a melhor para a RTX 2050.
 
 ## Entrega
 

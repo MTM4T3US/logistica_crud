@@ -347,3 +347,22 @@ def test_spoken_shutdown_delay_is_respected_or_refused(text, args, said):
     else:
         assert plan.calls[0].args == args
         assert plan.render([Out(plan.calls[0], True, True, "ok")], "senhor").startswith(said)
+
+
+# ---------------------------------------------------------------- 0.6.1: entrar só pelo rosto
+def test_face_entry_needs_no_blink_by_default_and_blink_is_a_hud_choice(client):
+    core = client.core
+    me = [0.1] * 1024
+    core.gate.enroll([me, me, me], "4321")
+    core.gate.lock()
+    assert core.gate.liveness == "desligado" and core.runtime()["face_blink"] is False and core.runtime()["face_auto"] is False
+    assert core.gate.verify([me], {"blink": False}).ok                                   # só o rosto: entra
+    core.gate.lock()
+    core.update_runtime({"face_blink": True, "face_auto": True})
+    assert core.gate.liveness == "piscar" and core.runtime()["face_auto"] is True
+    assert core.gate.verify([me], {"blink": False}).reason == "liveness"                  # religada no HUD: pede piscada
+    assert core.gate.verify([me], {"blink": True}).ok
+    core.update_runtime({"face_blink": "sim"})                                             # valor inválido: ignora
+    assert core.gate.liveness == "piscar"
+    core.update_runtime({"face_blink": False})
+    assert core.gate.status()["liveness"] == "desligado"

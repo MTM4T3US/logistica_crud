@@ -59,7 +59,7 @@ def claims_action(text: str) -> bool:
     return bool(_ACTION_CLAIM.search(text or ""))
 from .voice.tts import STYLES, GeminiTTS, LocalTTS, PiperTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 
 SCENE_DAYS = {"todos": range(7), "dias_uteis": range(5), "fim_de_semana": (5, 6)}
 MAX_TOOL_ROUNDS = 6
@@ -186,6 +186,11 @@ class Assistant:
         self.last_timings: dict[str, float] | None = None
         self.led_fx = self._make_led_effects(settings)
         self._intro_task: asyncio.Task | None = None
+        self._apply_face_runtime()
+
+    def _apply_face_runtime(self) -> None:
+        """0.6.1: a piscada na entrada é escolha do usuário no HUD (padrão: só o rosto)."""
+        self.gate.liveness = "piscar" if self.runtime().get("face_blink") else "desligado"
 
     def _make_led_effects(self, settings: Settings):
         """Efeitos de luz só na fita REAL (JARVIS_LEDS=bluetooth); o simulador não pisca nada."""
@@ -261,6 +266,8 @@ class Assistant:
             "continuous_consent": False, "barge_in": True,
             "intro_enabled": True, "intro_music_volume": 0.7, "intro_voice_delay_s": 5.0,
             "scene_schedules": {},
+            # 0.6.1: entrar só pelo rosto (sem piscar); câmera automática na tela de bloqueio (opcional)
+            "face_blink": False, "face_auto": False,
         }
         saved = self.memory.get_setting("runtime", {}) or {}
         return {**defaults, **{k: v for k, v in saved.items() if k in defaults}}
@@ -283,6 +290,7 @@ class Assistant:
             "cloud_audio_consent": lambda v: isinstance(v, bool),
             "user_title": lambda v: isinstance(v, str) and 0 < len(v.strip()) <= 24,
             "intro_enabled": lambda v: isinstance(v, bool),
+            "face_blink": lambda v: isinstance(v, bool), "face_auto": lambda v: isinstance(v, bool),
             "scene_schedules": lambda v: isinstance(v, dict) and len(v) <= 20 and all(
                 isinstance(k, str) and isinstance(x, dict) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(x.get("at", "")))
                 and x.get("days", "todos") in SCENE_DAYS and isinstance(x.get("on", True), bool) for k, x in v.items()),
@@ -295,6 +303,8 @@ class Assistant:
         self.memory.set_setting("runtime", rt)
         if "chat_model" in patch or "tts_model" in patch:
             self._apply_models(rt)
+        if "face_blink" in patch:
+            self._apply_face_runtime()
         return rt
 
     def _voice_for(self, engine: TTSEngine, rt: dict[str, Any]) -> str | None:

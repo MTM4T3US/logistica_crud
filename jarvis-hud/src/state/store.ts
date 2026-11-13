@@ -9,6 +9,9 @@ export const MODES: Mode[] = ['idle', 'listening', 'thinking', 'speaking', 'face
 const params = new URLSearchParams(window.location.search)
 const pMode = params.get('state') as Mode | null
 const pQuality = params.get('q') as Quality | null
+/** escolha salva nas Configurações ("auto" ou um perfil); o parâmetro ?q= da URL vence */
+const saved = (() => { try { return localStorage.getItem('jarvis.qualidade') } catch { return null } })()
+const fixed = (pQuality && ['high', 'medium', 'low'].includes(pQuality) ? pQuality : saved && ['high', 'medium', 'low'].includes(saved) ? saved : null) as Quality | null
 
 export const boot = {
   /** segundos já decorridos no estado inicial (útil para screenshots determinísticos) */
@@ -55,8 +58,8 @@ interface State {
 export const useStore = create<State>((set, get) => ({
   mode: pMode && MODES.includes(pMode) ? pMode : 'idle',
   since: now() - boot.at,
-  quality: pQuality && ['high', 'medium', 'low'].includes(pQuality) ? pQuality : 'medium',
-  autoQuality: !pQuality,
+  quality: fixed ?? 'medium',
+  autoQuality: !fixed,
   luz: 'CINEMA',
   ritmo: 'CINEMA',
   camera: 'AUTOMÁTICA',
@@ -75,7 +78,10 @@ export const useStore = create<State>((set, get) => ({
       demo: mode !== 'idle',
     })),
   setLive: (mode) => set({ mode, since: now(), demo: false }),
-  setQuality: (quality, auto = false) => set({ quality, autoQuality: auto }),
+  setQuality: (quality, auto = false) => {
+    set({ quality, autoQuality: auto })
+    try { localStorage.setItem('jarvis.qualidade', auto ? 'auto' : quality) } catch { /* modo privado */ }
+  },
   cycle: (k) => {
     const s = get()
     if (k === 'luz') set({ luz: s.luz === 'CINEMA' ? 'SUAVE' : 'CINEMA' })

@@ -1,4 +1,4 @@
-# JARVIS OS 0.6
+# JARVIS OS 0.6.1
 
 Assistente pessoal com interface holográfica: um HUD em React + Three.js e um núcleo local em
 Python (FastAPI) que conversa pelo Google Gemini, fala, ouve e consulta dados reais do
@@ -6,7 +6,7 @@ computador e de Itumbiara-GO.
 
 Esta pasta é independente do CRUD de logística que está na raiz do repositório.
 
-> **Estado (0.6):** escrita em Linux na nuvem (318 testes automáticos do núcleo e o teste de navegador com 17
+> **Estado (0.6.1):** escrita em Linux na nuvem (319 testes automáticos do núcleo e o teste de navegador com 18
 > verificações). As versões 0.3 a 0.5.2 já foram testadas no seu Windows pelo outro chat; o app da bandeja,
 > as cenas e o HUD novo da 0.6 ainda não. Roteiro: [`docs/PROMPT_TESTE_WINDOWS.md`](docs/PROMPT_TESTE_WINDOWS.md);
 > o que mudou e o que falta: [`docs/RELATORIO_0.6.md`](docs/RELATORIO_0.6.md).
@@ -24,7 +24,7 @@ Esta pasta é independente do CRUD de logística que está na raiz do repositór
 | Abrir apps/pastas/projetos, volume, mídia, janelas, rotinas | Windows, só para itens de `backend/config/permissions.json` (não testado em Windows ainda). |
 | LEDs | Driver real ELK-BLEDDM por Bluetooth (`JARVIS_LEDS=bluetooth`) ou simulador (padrão). Não testado com a fita ainda. |
 | Persiana, robô | **Simuladores.** Nenhum hardware é acionado. |
-| Entrada por rosto | Real, no navegador: câmera local, malha de 468 pontos, piscar, descritor comparado pelo núcleo; PIN reserva. Nenhuma imagem é gravada. Na demonstração (teclas 1–6) continua encenada e marcada DEMO. |
+| Entrada por rosto | Real, no navegador: câmera local, malha de 468 pontos, descritor comparado pelo núcleo; PIN reserva. Desde a 0.6.1 abre **só reconhecendo o rosto** (a piscada virou opção). Nenhuma imagem é gravada. Na demonstração (teclas 1–6) continua encenada e marcada DEMO. |
 | Música de entrada | Arquivo do próprio usuário, guardado só no PC; abaixa sob a voz. |
 | Computador (0.5) | Qualquer programa instalado, sites, arquivos, digitar/atalhos, captura, brilho, bloquear/suspender/desligar (com confirmação). Sem terminal. |
 | Computer use (0.5) | Vê a tela e usa mouse/teclado via Gemini (autorização por tarefa; ~1 pedido de IA por passo). |
@@ -33,7 +33,7 @@ Esta pasta é independente do CRUD de logística que está na raiz do repositór
 | Fechadura (0.5) | Só trancar e ver o estado, protocolo assinado ([`docs/FECHADURA.md`](docs/FECHADURA.md)); simulador até parear. |
 | App do Windows (0.6) | Ícone na bandeja, iniciar com o Windows, atalhos globais (`Ctrl+Alt+J` abre, `Ctrl+Alt+Espaço` fala), janela própria sem barra do navegador. |
 | Cenas (0.6) | "Bom dia", "modo cinema", "modo foco", "boa noite", "estou saindo": luzes de casa + fita + volume + porta + resumo, por voz, botão ou horário. |
-| Mapa 3D | Itumbiara real (OpenStreetMap, baixado uma vez e guardado no PC). Sem o mapa baixado: cidade fictícia, identificada na tela. |
+| Mapa 3D | Itumbiara real (OpenStreetMap, baixado uma vez e guardado no PC): ruas, rio, praças, prédios mapeados e pontos de referência com nome. Desde a 0.6.1 as quadras recebem **casas ilustrativas** de frente para as ruas reais (o OSM de Itumbiara quase não tem casas desenhadas), avisado na tela. Sem o mapa baixado: cidade fictícia, identificada na tela. |
 | Notícias | Google Notícias de Itumbiara e do Brasil (feeds RSS, sem inventar manchetes). `JARVIS_NEWS_FEEDS=off` desliga. |
 
 ## Iniciar no Windows
@@ -95,15 +95,17 @@ Sem o núcleo rodando, o HUD abre do mesmo jeito em modo demonstração.
 
 ## Entrada (0.4)
 
-1. Configurações → **ENTRADA POR ROSTO**: defina um PIN reserva e clique **Cadastrar meu rosto** (pisque uma
-   vez e vire o rosto de leve).
+1. Configurações → Entrada → **ENTRADA POR ROSTO**: defina um PIN reserva e clique **Cadastrar meu rosto** (vire o
+   rosto de leve). Ali também ficam as opções "Entrar só pelo rosto, sem piscar" (padrão) e "Ligar a câmera sozinho
+   na tela de bloqueio".
 2. Configurações → **MÚSICA DE ENTRADA**: escolha um arquivo de música seu.
-3. Ao abrir o JARVIS: **Iniciar reconhecimento** → olhe e pisque → música → boas-vindas → a câmera voa
-   para Itumbiara e ele fala o clima e as notícias.
+3. Ao abrir o JARVIS: **Iniciar reconhecimento** (ou a câmera liga sozinha, se escolhido) → olhe para a câmera →
+   música → boas-vindas → a câmera voa para Itumbiara e ele fala o clima e as notícias.
 4. Para bloquear: "Jarvis, bloqueia o Jarvis" ou o botão nas Configurações. Desbloquear é só com rosto ou PIN.
 
 A entrada por rosto protege o JARVIS de quem senta no seu computador; não substitui a senha do Windows
-e nunca serve para a fechadura.
+e nunca serve para a fechadura. **Sem a piscada, uma foto boa do seu rosto pode abrir o JARVIS** (a nota anti-foto
+ainda não é confiável); para mais segurança, desmarque "Entrar só pelo rosto" e ele volta a pedir uma piscada.
 
 ## Usar
 
@@ -160,10 +162,11 @@ e o núcleo confere. Detalhes em [`docs/ARQUITETURA_JARVIS_CORE.md`](docs/ARQUIT
 | Perfil | Para | O que muda |
 |---|---|---|
 | `high` | GPU dedicada folgada | até 2× DPR, MSAA 4×, bloom em 8 níveis, cidade 56×56 quadras |
-| `medium` (padrão) | GPU intermediária, ex. RTX 2050 em 1080p | DPR até 1,25, bloom em 6 níveis, cidade 44×44 |
-| `low` | GPU integrada | sem pós-processamento, 75 % da resolução |
+| `medium` (padrão) | GPU intermediária, ex. RTX 2050 em 1080p | DPR até 1,25, bloom em 6 níveis, antisserrilhado SMAA, cidade com 85 % das casas |
+| `low` | GPU integrada | sem pós-processamento, resolução cheia com antisserrilhado nativo |
 
-Em "Automática", se a média ficar abaixo de ~27 fps por 4 s, o perfil desce um degrau. Os
+Em "Automática", se a média ficar abaixo de 24 fps por 8 s **com a janela à vista e em foco**, o perfil desce um
+degrau (antes da 0.6.1, uma janela escondida também derrubava a qualidade). A escolha fica salva no navegador. Os
 perfis não foram medidos em uma RTX 2050. Se o Windows estiver usando a GPU integrada, force a
 dedicada em *Configurações → Sistema → Tela → Elementos gráficos* para o navegador.
 

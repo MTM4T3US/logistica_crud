@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
-import { Bloom, ChromaticAberration, EffectComposer, Noise, Vignette } from '@react-three/postprocessing'
+import { Bloom, ChromaticAberration, EffectComposer, Noise, SMAA, Vignette } from '@react-three/postprocessing'
 import * as THREE from 'three'
 import { STAGE } from './glsl'
 import { Space } from './Space'
@@ -36,11 +36,15 @@ function Stage({ motes, facePoints }: { motes: number; facePoints: number }) {
 function CityLayer({ blocks }: { blocks: number }) {
   const map = useJarvis((s) => s.cityMap)
   const demo = useStore((s) => s.demo)
+  const mode = useStore((s) => s.mode)
+  // a cidade real é montada na 1ª ida ao mapa (atrás da névoa da transição), não na abertura do JARVIS
+  const wanted = useRef(false)
+  if (mode === 'map') wanted.current = true
   const real = map && !demo
   return (
     <>
       <City blocks={blocks} hidden={!!real} />
-      {real && <RealCity data={map} />}
+      {real && wanted.current && <RealCity data={map} />}
     </>
   )
 }
@@ -69,6 +73,7 @@ export function Scene() {
           {p.aberration ? <ChromaticAberration offset={new THREE.Vector2(0.0006, 0.0006)} radialModulation={false} modulationOffset={0} /> : <></>}
           <Noise opacity={0.035} />
           <Vignette eskil={false} offset={0.22} darkness={0.62} />
+          {p.smaa ? <SMAA /> : <></>}
         </EffectComposer>
       )}
     </Canvas>

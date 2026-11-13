@@ -188,7 +188,7 @@ export function enrollFace(pin: string) {
   useJarvis.setState({ settingsOpen: false })
   useStore.getState().setLive('face')
   void faceCam.start('enroll', {
-    requireBlink: true, pin,
+    requireBlink: requireBlink(), pin,
     onDone: () => window.setTimeout(() => { if (useStore.getState().mode === 'face') useStore.getState().setLive('idle') }, 2200),
   })
 }

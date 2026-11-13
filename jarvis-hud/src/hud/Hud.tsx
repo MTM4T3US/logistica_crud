@@ -10,8 +10,8 @@ import { rig } from '../state/rig'
 import { Settings } from './Settings'
 import { Dock, Drawer, Help, Toast, TopActions } from './Panels'
 
-/** "0.6.0" → "0.6" (o núcleo informa a versão; sem núcleo, a do HUD). */
-export const useVersion = () => (useJarvis((s) => s.core?.version) ?? '0.6').split('.').slice(0, 2).join('.')
+/** "0.6.0" → "0.6", "0.6.1" → "0.6.1" (o núcleo informa a versão; sem núcleo, a do HUD). */
+export const useVersion = () => (useJarvis((s) => s.core?.version) ?? '0.6.1').replace(/\.0$/, '')
 
 /** Re-renderiza o HUD ~20×/s (relógio, legendas, porcentagens). */
 function useTick(hz = 20) {
@@ -360,7 +360,10 @@ function LiveFacePanels() {
     }
   }, [f.stream])
   const ok = f.phase === 'ok' || rig.faceOk
-  const steps: [string, boolean][] = [['ROSTO', f.found || ok], ['PROVA DE VIDA', f.blinked || ok], [f.mode === 'enroll' ? 'CADASTRO' : 'IDENTIDADE', ok]]
+  const blink = useJarvis((s) => s.core?.face?.liveness === 'piscar')
+  const steps: [string, boolean][] = blink
+    ? [['ROSTO', f.found || ok], ['PROVA DE VIDA', f.blinked || ok], [f.mode === 'enroll' ? 'CADASTRO' : 'IDENTIDADE', ok]]
+    : [['ROSTO', f.found || ok], ['LEITURA', f.progress > 0 || ok], [f.mode === 'enroll' ? 'CADASTRO' : 'IDENTIDADE', ok]]
   rig.faceScan = ok ? 1 : (f.found ? 0.34 : 0) + (f.blinked ? 0.33 : 0) + 0.33 * f.progress
   const pct = f.similarity !== null ? Math.round(f.similarity * 100) : null
   return (
@@ -404,6 +407,12 @@ function LockScreen() {
     return () => window.removeEventListener('keydown', on)
   }, [pinOpen])
   const idle = f.phase === 'off' || f.phase === 'error'
+  const auto = useJarvis((s) => !!s.core?.runtime.face_auto)
+  const tried = useRef(false)
+  useEffect(() => {
+    // "Ligar a câmera sozinho": uma tentativa por bloqueio (se a câmera falhar, fica o botão e o PIN)
+    if (auto && !tried.current && useFace.getState().phase === 'off' && !pinOpen) { tried.current = true; startFaceCheck() }
+  }, [auto, pinOpen])
   const submitPin = (e: React.FormEvent) => { e.preventDefault(); if (pin.length >= 4 && sendPin(pin)) setPin('') }
   return (
     <div className={`lock ${idle ? 'full' : 'mini'}`}>
@@ -415,7 +424,7 @@ function LockScreen() {
           <div className="lock-title">IDENTIFICAÇÃO NECESSÁRIA</div>
           {f.phase === 'error' && <div className="chip err">{f.message}</div>}
           <button className="lock-go" onClick={startFaceCheck} autoFocus>INICIAR RECONHECIMENTO</button>
-          <div className="lock-note">A câmera é usada só neste computador. Nenhuma imagem é gravada ou enviada.</div>
+          <div className="lock-note">Olhe para a câmera: o JARVIS abre ao reconhecer o seu rosto. A câmera é usada só neste computador; nenhuma imagem é gravada ou enviada.</div>
         </>
       )}
       {pinSet && (pinOpen ? (
@@ -614,7 +623,7 @@ export function Hud() {
       <div className={`cards pinned ${real && stage && !locked ? 'show' : ''}`}><div className="rside"><Dock /><ToolLog /></div></div>
 
       {inMap && (useJarvis.getState().cityMap && !demo
-        ? <div className="mapnote">{useJarvis.getState().cityMap!.city.toUpperCase()} · MAPA REAL · {useJarvis.getState().cityMap!.attribution.toUpperCase()} · PRÉDIOS SÓ ONDE MAPEADOS, ALTURA EXAGERADA</div>
+        ? <div className="mapnote">{useJarvis.getState().cityMap!.city.toUpperCase()} · RUAS, RIO E PRÉDIOS REAIS ({useJarvis.getState().cityMap!.attribution.toUpperCase()}) · CASAS DAS QUADRAS ILUSTRATIVAS · ALTURA EXAGERADA</div>
         : <div className="mapnote">CENA DE MAPA 3D · <b className="demo">DEMONSTRAÇÃO</b> CIDADE FICTÍCIA — NÃO REPRESENTA {(useJarvis.getState().core?.location.city ?? 'Itumbiara').toUpperCase()}</div>)}
       {ui && !locked && !enrolling && <CommandBar />}
       {ui && settingsOpen && !locked && <Settings />}

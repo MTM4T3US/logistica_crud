@@ -446,7 +446,7 @@ function Entrance({ core }: { core: CoreState }) {
         <h3>ENTRADA POR ROSTO</h3>
         <p className={face?.active ? 'good' : 'dim'}>
           {!face?.enrolled ? 'Nenhum rosto cadastrado: o JARVIS abre sem verificação.'
-            : face.active ? `Ligada · ${face.samples} capturas · semelhança mínima ${Math.round(face.threshold * 100)}% · prova de vida: ${face.liveness === 'piscar' ? 'piscar' : 'desligada'}`
+            : face.active ? `Ligada · ${face.samples} capturas · semelhança mínima ${Math.round(face.threshold * 100)}% · ${face.liveness === 'piscar' ? 'pede uma piscada' : 'abre só pelo rosto'}`
               : 'Cadastrada, mas desligada: o JARVIS abre sem verificação.'}
         </p>
         <label>{needPin ? 'PIN reserva (obrigatório, 4 a 12 dígitos)' : 'Novo PIN reserva (opcional)'}
@@ -458,7 +458,10 @@ function Entrance({ core }: { core: CoreState }) {
           {face?.active && <button onClick={() => lockNow()}>Bloquear agora</button>}
           {face?.enrolled && <button className="danger" onClick={() => { if (window.confirm('Apagar o rosto e o PIN deste computador?')) faceForget() }}>Apagar cadastro</button>}
         </div>
-        <p className="dim">O cadastro pede uma piscada e 6 capturas, virando o rosto de leve. A câmera liga só durante a verificação e nada é gravado: guardo apenas números que descrevem o rosto, em backend/data/rosto.json. Isso protege o JARVIS de quem senta no seu computador — não substitui a senha do Windows nem serve para a fechadura.</p>
+        <label className="check"><input type="checkbox" checked={!rt.face_blink} onChange={(e) => void save({ face_blink: !e.target.checked })} />Entrar só pelo rosto, sem piscar</label>
+        {!rt.face_blink && <p className="warn">Sem a piscada, uma foto boa do seu rosto pode abrir o JARVIS (a nota anti-foto ainda não é confiável). Para mais segurança, desmarque: ele pede uma piscada.</p>}
+        <label className="check"><input type="checkbox" checked={!!rt.face_auto} onChange={(e) => void save({ face_auto: e.target.checked })} />Ligar a câmera sozinho na tela de bloqueio (sem clicar em Iniciar)</label>
+        <p className="dim">O cadastro faz 6 capturas, virando o rosto de leve{rt.face_blink ? ' (e pede uma piscada)' : ''}. A câmera liga só durante a verificação e nada é gravado: guardo apenas números que descrevem o rosto, em backend/data/rosto.json. Isso protege o JARVIS de quem senta no seu computador — não substitui a senha do Windows nem serve para a fechadura.</p>
       </section>
 
       <section>

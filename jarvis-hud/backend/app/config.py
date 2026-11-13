@@ -116,7 +116,7 @@ class Settings:
     devices_simulators: bool = True
     # --- Entrada por rosto (0.4) ---
     face_threshold: float = 0.62      # semelhança mínima (0..1) para liberar
-    face_liveness: str = "piscar"     # piscar | desligado
+    face_liveness: str = "desligado"  # 0.6.1: a escolha fica no HUD (Configurações → Entrada); este valor é ignorado
     face_relock_min: float = 2.0      # HUD fechado por mais que isso → pede o rosto de novo
     face_antispoof_min: float = 0.0   # 0 = só registra a nota anti-foto; calibre no seu PC antes de ligar
     # --- Mapa real (OpenStreetMap) ---
@@ -216,7 +216,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         news_rss_url=(os.getenv("JARVIS_NEWS_RSS_URL") or "").strip() or None,
         news_feeds=_feeds(os.getenv("JARVIS_NEWS_FEEDS")),
         face_threshold=_float("JARVIS_FACE_THRESHOLD", 0.62),
-        face_liveness=(os.getenv("JARVIS_FACE_LIVENESS") or "piscar").strip().lower(),
+        face_liveness="desligado",
         face_relock_min=_float("JARVIS_FACE_RELOCK_MIN", 2.0),
         face_antispoof_min=_float("JARVIS_FACE_ANTISPOOF_MIN", 0.0),
         tuya_devices=Path(os.getenv("JARVIS_TUYA_DEVICES")) if os.getenv("JARVIS_TUYA_DEVICES") else None,

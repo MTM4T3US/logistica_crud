@@ -28,6 +28,8 @@ export interface CoreState {
   location: { city: string; state: string; state_code: string; country: string; timezone: string; language: string }
   runtime: {
     intro_enabled?: boolean; intro_music_volume?: number; intro_voice_delay_s?: number
+    /** 0.6.1: piscar para entrar (padrão: não) e câmera automática na tela de bloqueio */
+    face_blink?: boolean; face_auto?: boolean
     tts_engine: string; tts_voice_gemini: string; tts_voice_local: string; tts_voice_piper: string; tts_style: string; stt_engine: string; speak: boolean
     memory_enabled: boolean; cloud_audio_consent: boolean; user_title: string; chat_model: string; tts_model: string; tts_speed: number
     router_mode: string; continuous_consent: boolean; barge_in: boolean

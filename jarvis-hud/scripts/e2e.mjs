@@ -202,6 +202,16 @@ try {
   await page.keyboard.press('?')
   check('Ajuda abre pelo teclado (?)', await page.isVisible('.modal .help-grid'))
   await page.keyboard.press('Escape')
+  // 0.6.1: cidade real com as quadras preenchidas (só se o núcleo já tem o mapa do OpenStreetMap)
+  if (await page.evaluate(() => !!window.__jarvis?.jarvis?.getState().cityMap)) {
+    await page.fill('.cmd-row input', 'mostra o mapa'); await page.keyboard.press('Enter')
+    await page.waitForFunction(() => !!window.__city, null, { timeout: 60000 }).catch(() => {})
+    await page.waitForTimeout(4000)
+    const city = await page.evaluate(() => window.__city)
+    const note = await page.$eval('.mapnote', (e) => e.textContent).catch(() => '')
+    await page.screenshot({ path: `${out}/cidade.png` })
+    check('Cidade real com casas nas quadras e aviso do que é ilustrativo', !!city && city.houses > 0 && /ILUSTRATIVAS/.test(note), `${JSON.stringify(city)} · ${note}`)
+  } else console.log('        (sem mapa do OpenStreetMap baixado: verificação da cidade pulada)')
   await shot('06-configuracoes')
   check('Sem erros de JavaScript na página', pageErrors.length === 0, pageErrors.join(' | '))
 } catch (err) {

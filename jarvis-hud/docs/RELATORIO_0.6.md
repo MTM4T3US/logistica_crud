@@ -69,3 +69,36 @@ para o chat do Windows ([`PROMPT_TESTE_WINDOWS.md`](PROMPT_TESTE_WINDOWS.md), fa
 1. Fases 17 a 19 no Windows, e as pendências da 0.5.3 (copiar/colar depois da correção das teclas).
 2. Fases 15 e 16 com as lâmpadas Tuya e a fechadura do TCC.
 3. Computer use com o modelo especializado, se aparecer na sua conta.
+
+## Atualização 0.6.1 — cidade, qualidade e entrada só pelo rosto
+
+Pedido: "melhorar a qualidade e o design dele inteiro, melhorar o design da cidade (está estranho, só as linhas
+azuis); no desbloqueio não precisa piscar, ele abre só reconhecendo o rosto".
+
+| Pedido | Feito |
+|---|---|
+| Cidade "só linhas azuis" | **Causa:** o OpenStreetMap de Itumbiara tem as ruas completas e quase nenhuma casa desenhada, e as ruas eram fitas de neon azul. **Agora**, mais perto da referência (ruas escuras, telhados cerâmicos, quadras arborizadas): ruas de asfalto com calçadas e só um fio de luz nas avenidas; **casas ilustrativas** de frente para as ruas reais (nunca em cima de rua, rio, praça ou prédio mapeado; só na área urbana; densas no centro, baixas nos bairros); prédios mapeados com **contorno ciano** (o que é dado real); árvores nos quintais e nas praças; rio com reflexo animado; faróis e lanternas de carros andando nas avenidas e rodovias; luzes de rua; nome dos pontos de referência (prefeitura, hospital, rodoviária…); varredura de radar dentro do anel. A nota do mapa diz o que é real e o que é ilustrativo. A cidade só é montada na primeira ida ao mapa (cerca de 0,1 s com o mapa de teste). |
+| Qualidade geral | **Antisserrilhado** no perfil médio (SMAA; antes não havia nenhum). Perfil baixo com resolução cheia (era 75 %). **A qualidade automática não cai mais com a janela escondida:** só com a janela à vista e em foco, depois de 8 s abaixo de 24 fps (no seu relatório da 0.4, o FPS foi medido com o painel oculto: 3,7 FPS, o que derrubaria a qualidade sem você ver). A escolha da qualidade fica salva. Luzes de cidade do planeta mais nítidas (eram bolas borradas). Nota do mapa no canto, sem cobrir os nomes. |
+| Entrar sem piscar | **Padrão agora: só o rosto.** Configurações → Entrada: "Entrar só pelo rosto, sem piscar" (ligado) e "Ligar a câmera sozinho na tela de bloqueio" (desligado; ligue para não precisar clicar em Iniciar). A variável `JARVIS_FACE_LIVENESS` do `.env` deixou de valer. |
+
+**Atenção:** sem a piscada, uma foto boa do seu rosto pode abrir o JARVIS; a nota anti-foto ainda não é confiável
+(72–83 % para fotos na 0.4). O JARVIS nunca abre a fechadura pelo rosto, e o PIN e a pausa depois de erros
+continuam. Para mais segurança, volte a pedir a piscada nas Configurações.
+
+### Testes da 0.6.1
+
+- **Núcleo:** 319 testes. Novo teste: entrar sem piscar é o padrão, a piscada volta pelo HUD, valor inválido é
+  ignorado.
+- **Navegador:** 18 de 18 verificações. Nova: "mostra o mapa" monta a cidade com casas e mostra o aviso.
+- **Entrada por rosto com câmera falsa** (fotos públicas, cadastro feito na 0.4):
+
+  | Caso | Resultado |
+  |---|---|
+  | Outra pessoa | **recusada** (32 %) |
+  | Dono, com outra foto, **sem piscar** | **entrou** (69 %) |
+  | Piscada religada, foto parada | ficou em "Pisque uma vez" |
+  | Câmera automática | ligou sem clique |
+
+- **Cidade:** desenhada sobre um **mapa sintético** parecido com Itumbiara. O OpenStreetMap continua inacessível
+  daqui: o acesso ao overpass-api.de foi liberado no ambiente, mas o servidor derruba a conexão. Falta ver com a
+  Itumbiara real no seu PC (fase 20).
