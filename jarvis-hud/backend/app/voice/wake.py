@@ -98,9 +98,20 @@ class OpenWakeWordDetector(WakeDetector):
             if self._factory is not None:
                 self._model = self._factory()
             else:
+                from importlib.metadata import version
+
                 from openwakeword.model import Model
 
-                self._model = Model(wakeword_model_paths=[self._path()])
+                # openwakeword >= 0.5 usa `wakeword_models` e, por padrão, tflite (que não existe no
+                # Windows); a 0.4 usava `wakeword_model_paths` e só ONNX.
+                try:
+                    major, minor = (int(p) for p in version("openwakeword").split(".")[:2])
+                except Exception:
+                    major, minor = 0, 6
+                if (major, minor) >= (0, 5):
+                    self._model = Model(wakeword_models=[self._path()], inference_framework="onnx")
+                else:
+                    self._model = Model(wakeword_model_paths=[self._path()])
         return self._model
 
     def _score(self, wav: bytes) -> float:

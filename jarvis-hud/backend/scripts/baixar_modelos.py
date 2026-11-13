@@ -2,7 +2,7 @@
 
 - Voz Piper pt_BR-faber-medium (masculina, ~63 MB) de huggingface.co/rhasspy/piper-voices
 - Modelo Whisper (padrão "small", ~480 MB) para a transcrição local
-- O modelo de palavra-chave "hey_jarvis" já vem dentro do pacote openwakeword
+- Modelo de palavra-chave "hey_jarvis" do openWakeWord (o pacote 0.5+ não o inclui; é baixado do GitHub dele)
 
 Uso:  .venv\\Scripts\\python scripts\\baixar_modelos.py [--whisper base|small|medium] [--sem-whisper]
 """
@@ -67,6 +67,13 @@ def main() -> int:
         import openwakeword
 
         path = Path(openwakeword.__file__).parent / "resources" / "models" / "hey_jarvis_v0.1.onnx"
+        if not path.exists():
+            # o pacote (>= 0.5) não traz os modelos: baixa hey_jarvis + modelos de áudio (melspectrogram,
+            # embedding, VAD) do GitHub do openWakeWord para a pasta do pacote
+            print("  baixando hey_jarvis e modelos de áudio do openWakeWord (~10 MB)...")
+            from openwakeword.utils import download_models
+
+            download_models(["hey_jarvis_v0.1"])
         print(f"  {'pronto' if path.exists() else 'NÃO ENCONTRADO'}: {path}")
         ok = ok and path.exists()
     except Exception as exc:

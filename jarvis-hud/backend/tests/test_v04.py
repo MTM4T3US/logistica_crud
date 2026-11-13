@@ -369,3 +369,22 @@ def test_map_route_reports_missing_map_without_an_http_error(client, monkeypatch
     r = client.get("/api/map", headers=auth())
     assert r.status_code == 200 and r.json()["ok"] is False and "OpenStreetMap" in r.json()["error"]
     assert client.get("/api/state", headers=auth()).json()["map"] == {"ready": False, "city": "Itumbiara"}
+
+
+def test_briefing_skips_duplicate_story_and_cut_captions():
+    """Visto no Windows: o mesmo fato veio do Instagram (legenda cortada "…a expectativa d") e do
+    Rota Jurídica; o resumo falava os dois, o primeiro cortado no meio da palavra."""
+    from app.services.briefing import _news_text
+
+    caption = ("O atendimento do Cejusc de Itumbiara, antes restrito a três municípios, foi ampliado para abranger também "
+               "as jurisdições das Varas do Trabalho de Goiatuba e Quirinópolis, alcançando 23 municípios da região Sul de Goiás. "
+               "Com a mudança, a expectativa d")
+    news = {"enabled": True, "sections": [
+        {"label": "Itumbiara", "items": [
+            {"title": caption, "source": "Instagram"},
+            {"title": "TRT-GO amplia atendimento do Cejusc de Itumbiara para 23 municípios da região Sul de Goiás", "source": "Rota Jurídica"},
+            {"title": "Prefeitura inaugura nova praça no centro", "source": "Jornal"}]},
+        {"label": "Brasil", "items": [{"title": "Senado aprova texto-base de pacote", "source": "Agência Brasil"}]}]}
+    text, used = _news_text(news, "Itumbiara")
+    assert "expectativa d" not in text and text.count("Cejusc") == 1 and "TRT-GO amplia" in text
+    assert "nova praça" in text and "Senado aprova" in text and len(used) == 3

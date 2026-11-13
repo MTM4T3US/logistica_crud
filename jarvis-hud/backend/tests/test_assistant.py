@@ -340,7 +340,7 @@ async def test_sentences_are_synthesized_in_parallel_but_delivered_in_order(sett
     elapsed = asyncio.get_running_loop().time() - started
     audio = conn.of("audio")
     assert [a["seq"] for a in audio] == [0, 1, 2, 3] and [a["text"].split()[0] for a in audio] == ["Primeira", "Segunda", "Terceira", "Quarta"]
-    assert 2 <= tts.max_running <= settings.tts_parallel and elapsed < 0.14   # em série levaria 0,15 s
+    assert 2 <= tts.max_running <= settings.tts_parallel and elapsed < 0.15   # em série levaria 0,15 s (+ resolução de ~16 ms do relógio do Windows)
 
 
 async def test_speech_text_is_normalized_but_subtitle_keeps_original(settings, perms):
@@ -409,3 +409,34 @@ async def test_speech_rate_is_validated(settings, perms):
     core, _ = build(settings, perms)
     assert core.update_runtime({"tts_speed": 1.15})["tts_speed"] == 1.15
     assert core.update_runtime({"tts_speed": 3})["tts_speed"] == 1.15 and core.update_runtime({"tts_speed": "rápido"})["tts_speed"] == 1.15
+
+
+async def test_router_replies_use_local_voice_in_auto_mode_to_save_tts_quota(settings, perms):
+    """Escolha do usuário no teste do Windows: comando local fala com voz local (Piper/sistema);
+    conversa com a IA continua com a voz da nuvem. Só no modo automático."""
+    cloud, local = FakeTTS("gemini", cloud=True, stream=True), FakeTTS("piper")
+    core, _ = build(settings, perms, [["Um buraco negro é uma região do espaço."]], tts={"gemini": cloud, "piper": local}, runtime={"router_mode": "local_first"})
+    conn = FakeConn()
+    await core.run_turn(conn, "volume 25")
+    assert conn.of("turn_end")[0]["mode"] == "router" and cloud.spoken == [] and local.spoken
+    await core.run_turn(FakeConn(), "explique o que é um buraco negro")
+    assert cloud.spoken   # conversa: voz Gemini
+    cloud2, local2 = FakeTTS("gemini", cloud=True, stream=True), FakeTTS("piper")
+    core, _ = build(settings, perms, tts={"gemini": cloud2, "piper": local2}, runtime={"router_mode": "local_first", "tts_engine": "gemini"})
+    await core.run_turn(FakeConn(), "volume 25")
+    assert cloud2.spoken and local2.spoken == []   # escolha explícita do usuário é respeitada
+
+
+async def test_ai_claiming_an_action_without_a_tool_gets_a_warning(settings, perms):
+    """Visto no Windows: o Gemini respondeu "Brilho em 30 por cento: comando enviado." sem ferramenta."""
+    from app.assistant import claims_action
+
+    assert claims_action("Brilho em 30 por cento: comando enviado.") and not claims_action("Um buraco negro é uma região do espaço.")
+    core, _ = build(settings, perms, [["Brilho em 30 por cento: comando enviado."]], runtime={"router_mode": "ai_first"})
+    conn = FakeConn()
+    await core.run_turn(conn, "deixa mais claro")
+    assert any("nenhuma ação foi executada" in n["message"] for n in conn.of("notice"))
+    core, _ = build(settings, perms, [["Um buraco negro é uma região do espaço."]])
+    conn = FakeConn()
+    await core.run_turn(conn, "explique o que é um buraco negro")
+    assert not conn.of("notice")

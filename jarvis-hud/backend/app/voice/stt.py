@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import sys
 import threading
 from pathlib import Path
 import re
@@ -117,6 +118,21 @@ class GeminiSTT(STTEngine):
         raise last
 
 
+def _cuda_libs_ok() -> bool:
+    """No Windows, a GPU só serve ao faster-whisper se as DLLs do CUDA 12 (cuBLAS) e do cuDNN 9
+    estiverem acessíveis. Sem elas o modelo carrega na GPU mas a transcrição falha ou trava."""
+    if sys.platform != "win32":
+        return True
+    import ctypes
+
+    for dll in ("cublas64_12.dll", "cudnn64_9.dll"):
+        try:
+            ctypes.WinDLL(dll)
+        except OSError:
+            return False
+    return True
+
+
 class WhisperSTT(STTEngine):
     """Transcrição 100% local com faster-whisper. O modelo fica em backend/models/whisper
     (baixado pelo INSTALAR_RECURSOS_LOCAIS.bat ou no 1º uso). Tenta a GPU (CUDA) quando pedido e
@@ -151,7 +167,8 @@ class WhisperSTT(STTEngine):
             def make(size: str, device: str, compute: str) -> Any:
                 return WhisperModel(size, device=device, compute_type=compute, download_root=str(self.root) if self.root else None)
 
-        attempts = [("cuda", "float16"), ("cpu", self.compute)] if self.device in ("auto", "cuda") else [("cpu", self.compute)]
+        want_cuda = self.device == "cuda" or (self.device == "auto" and (self._factory is not None or _cuda_libs_ok()))
+        attempts = [("cuda", "float16"), ("cpu", self.compute)] if want_cuda else [("cpu", self.compute)]
         last: Exception | None = None
         for device, compute in attempts:
             try:
@@ -162,14 +179,37 @@ class WhisperSTT(STTEngine):
                 last = exc
         raise last or RuntimeError("faster-whisper não carregou")
 
+    @staticmethod
+    def _audio(wav: bytes) -> Any:
+        """WAV 16 bits -> float32 mono 16 kHz (o que o faster-whisper espera), sem passar pelo PyAV.
+        O faster-whisper 1.2 chama av.open(..., metadata_errors=...), que o PyAV 15+ não aceita mais
+        (TypeError no Windows com av 19). Outros formatos seguem para o decodificador dele."""
+        try:
+            from .wake import pcm16_mono_16k
+
+            return pcm16_mono_16k(wav).astype("float32") / 32768.0
+        except Exception:
+            return io.BytesIO(wav)
+
+    def _run(self, model: Any, wav: bytes) -> str:
+        segments, _ = model.transcribe(
+            self._audio(wav), language="pt", beam_size=1, vad_filter=True, condition_on_previous_text=False,
+            initial_prompt="Jarvis, assistente pessoal.",
+        )
+        return " ".join(s.text.strip() for s in segments)
+
     def _transcribe_blocking(self, wav: bytes) -> str:
         with self._lock:
             model = self._load()
-            segments, _ = model.transcribe(
-                io.BytesIO(wav), language="pt", beam_size=1, vad_filter=True, condition_on_previous_text=False,
-                initial_prompt="Jarvis, assistente pessoal.",
-            )
-            return " ".join(s.text.strip() for s in segments)
+            try:
+                return self._run(model, wav)
+            except Exception:
+                # o modelo pode CARREGAR na GPU e só falhar ao transcrever (ex.: Windows sem
+                # cublas64_12.dll). Volta para a CPU uma vez, com um modelo novo, e fica nela.
+                if not (self.loaded_on or "").startswith("cuda"):
+                    raise
+                self._model, self.device = None, "cpu"
+                return self._run(self._load(), wav)
 
     async def transcribe(self, wav: bytes, language: str = "pt-BR") -> STTResult:
         ok, reason = self.available()

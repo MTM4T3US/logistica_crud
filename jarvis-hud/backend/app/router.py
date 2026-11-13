@@ -65,6 +65,12 @@ def _report(ok_text: str) -> Callable[[list[ToolOutcome], str], str]:
         unverified = [o for o in outs if o.executed and isinstance(o.data, dict) and o.data.get("verified") is False]
         if not failed and unverified:
             return " ".join(o.summary for o in unverified) + sim
+        # feito só em parte (ex.: rotina com 1 de 2 etapas): nunca dizer "executada"
+        partial = [o for o in outs if o.executed and not o.ok]
+        if not failed and partial:
+            o = partial[0]
+            step = next((s.get("message", "") for s in (o.data or {}).get("steps", []) if not s.get("executed")), "")
+            return f"Só em parte, {title}: {o.summary}" + (f" Falhou: {step}" if step else "") + sim
         if not failed:
             return ok_text.format(title=title) + sim
         if len(failed) == len(outs):
@@ -118,7 +124,10 @@ class LocalRouter:
                 if any(re.search(rf"\b{re.escape(n)}\b", t) for n in names) or (rid == "programar" and re.search(r"\bprepar\w* .*program", t)):
                     return Plan("routine", [_call("run_routine", routine_id=rid)], _report(f"Rotina “{r.name}” executada, {{title}}."))
         # ---- luzes
-        if "set_lights" in tools and re.search(r"\b(luz|luzes|led|leds|fita|lampada|iluminacao)\b|\bmodo cinema\b", t):
+        # "brilho em 30%" sozinho também é das luzes (visto no teste do Windows: ia para o Gemini, que
+        # respondeu "comando enviado" sem chamar ferramenta nenhuma). Brilho da TELA fica de fora.
+        if "set_lights" in tools and (re.search(r"\b(luz|luzes|led|leds|fita|lampada|iluminacao)\b|\bmodo cinema\b", t)
+                                      or (re.search(r"\bbrilho\b", t) and not re.search(r"\b(tela|monitor|ecra|display)\b", t))):
             plan = self._lights(t)
             if plan:
                 return plan

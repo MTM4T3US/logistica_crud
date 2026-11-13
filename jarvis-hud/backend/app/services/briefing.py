@@ -47,6 +47,44 @@ def _de(label: str) -> str:
     return "do Brasil" if label == "Brasil" else f"de {label}"
 
 
+_STOP = {"de", "da", "do", "das", "dos", "a", "o", "as", "os", "e", "em", "para", "com", "no", "na", "nos", "nas", "por", "um", "uma", "que", "se"}
+TITLE_MAX = 140
+
+
+def _words(text: str) -> set[str]:
+    import re
+    import unicodedata
+
+    t = "".join(c for c in unicodedata.normalize("NFD", text.lower()) if unicodedata.category(c) != "Mn")
+    return {w for w in re.findall(r"[a-z0-9]+", t) if w not in _STOP and len(w) > 2}
+
+
+def _clean_title(title: str) -> str:
+    """Manchete falável. Alguns itens do Google Notícias (ex.: posts do Instagram) trazem como título a
+    legenda cortada no meio de uma palavra ("…a expectativa d") — visto no teste do Windows. Corta na
+    última frase completa ou, se não houver, na última palavra inteira com reticências."""
+    t = " ".join((title or "").split())
+    if len(t) <= TITLE_MAX:
+        return t
+    head = t[:TITLE_MAX]
+    end = max(head.rfind(". "), head.rfind("! "), head.rfind("? "))
+    return head[:end + 1] if end >= 40 else head[:head.rfind(" ")].rstrip(",;:") + "…"
+
+
+def _distinct(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Até `limit` manchetes sem repetir o mesmo assunto (no teste, o mesmo fato veio pelo Instagram e
+    pelo Rota Jurídica). Entre duplicatas fica a de título mais curto (a manchete de verdade)."""
+    picked: list[dict[str, Any]] = []
+    for item in items:
+        words = _words(item.get("title", ""))
+        dup = next((i for i, p in enumerate(picked) if words and len(words & _words(p["title"])) / max(1, min(len(words), len(_words(p["title"])))) >= 0.6), None)
+        if dup is None:
+            picked.append(item)
+        elif len(item.get("title", "")) < len(picked[dup]["title"]):
+            picked[dup] = item
+    return picked[:limit]
+
+
 def _news_text(news: dict[str, Any] | None, city: str) -> tuple[str, list[dict[str, Any]]]:
     if not news or not news.get("enabled"):
         return "", []
@@ -62,7 +100,7 @@ def _news_text(news: dict[str, Any] | None, city: str) -> tuple[str, list[dict[s
         if not items:
             parts.append(f"Não encontrei notícias recentes {_de(label)}.")
             continue
-        take = items[:2] if label == city else items[:1]
+        take = [{**i, "title": _clean_title(i.get("title", ""))} for i in _distinct(items[:6], 2 if label == city else 1)]
         used.extend(take)
         heads = "; ".join(i["title"].rstrip(".") for i in take)
         parts.append(f"Nas notícias de {label}: {heads}." if label == city else f"No {label}: {heads}." if label == "Brasil" else f"{label}: {heads}.")
