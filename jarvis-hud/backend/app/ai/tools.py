@@ -86,11 +86,14 @@ class ToolRegistry:
         devices: DeviceRegistry, weather: WeatherService, news: NewsService, memory: MemoryStore,
         memory_enabled: Callable[[], bool], briefing: Callable[[], Awaitable[dict[str, Any]]] | None = None,
         lock: Callable[[], bool] | None = None, map_status: Callable[[], dict[str, Any]] | None = None,
+        extensions: list[Callable[[], list["ToolSpec"]]] | None = None,
     ):
         self.settings, self.perms, self.monitor, self.controller = settings, perms, monitor, controller
         self.devices, self.weather, self.news, self.memory = devices, weather, news, memory
         self.memory_enabled = memory_enabled
         self._briefing, self._lock, self._map_status = briefing, lock, map_status
+        #: grupos de ferramentas de outros módulos (computador, agenda, casa…)
+        self.extensions = list(extensions or [])
 
     # ------------------------------------------------------------------ catálogo
     def specs(self) -> dict[str, ToolSpec]:
@@ -183,6 +186,8 @@ class ToolRegistry:
                 "remember", "Guardar lembrança", "Guarda um fato que o usuário pediu explicitamente para lembrar.",
                 _obj({"fact": {"type": "string", "maxLength": 300}}, ["fact"]), ActionClass.SAFE, self._remember))
             specs.append(ToolSpec("recall_memory", "Consultar lembranças", "Lista os fatos guardados a pedido do usuário.", _obj(), ActionClass.READ, self._recall))
+        for ext in self.extensions:
+            specs.extend(ext())
         return {s.name: s for s in specs}
 
     def declarations(self) -> list[dict[str, Any]]:

@@ -27,7 +27,7 @@ function Badge() {
   const where = conn === 'online' ? (ai?.mode === 'ai' ? `NÚCLEO ONLINE · IA ${ai.provider.toUpperCase()}` : 'NÚCLEO ONLINE · MODO LOCAL (SEM IA)') : conn === 'connecting' ? 'CONECTANDO AO NÚCLEO…' : 'NÚCLEO OFFLINE'
   return (
     <div className="badge">
-      JARVIS OS 0.4 · {where}
+      JARVIS OS 0.5 · {where}
       {demo && <b className="demo">DEMO · DADOS SIMULADOS</b>}
     </div>
   )
@@ -243,6 +243,23 @@ function NewsCard() {
   )
 }
 
+/** Compromissos de hoje (agenda local). */
+function AgendaCard() {
+  const agenda = useJarvis((s) => s.agenda)
+  if (!agenda) return null
+  const hhmm = (iso: string) => iso.slice(11, 16)
+  const nowIso = new Intl.DateTimeFormat('sv-SE', { timeZone: useJarvis.getState().core?.location.timezone ?? 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }).format(new Date()).replace(' ', 'T')
+  return (
+    <div className="agenda">
+      <div className="kicker">AGENDA · HOJE</div>
+      {agenda.today.length === 0 && <div className="ag"><span>livre</span></div>}
+      {agenda.today.slice(0, 5).map((e) => (
+        <div className={`ag ${!e.all_day && e.start < nowIso ? 'past' : ''}`} key={`${e.id}${e.start}`}><i className={!e.all_day && e.start >= nowIso ? 'on' : ''} />{e.all_day ? 'DIA' : hhmm(e.start)}<span>{e.title}</span></div>
+      ))}
+    </div>
+  )
+}
+
 function ago(published: string): string {
   const t = Date.parse(published)
   if (!t) return ''
@@ -378,7 +395,7 @@ function LockScreen() {
     <div className={`lock ${idle ? 'full' : 'mini'}`}>
       {idle && (
         <>
-          <div className="lock-kicker">JARVIS OS 0.4</div>
+          <div className="lock-kicker">JARVIS OS 0.5</div>
           <div className="lock-title">IDENTIFICAÇÃO NECESSÁRIA</div>
           {f.phase === 'error' && <div className="chip err">{f.message}</div>}
           <button className="lock-go" onClick={startFaceCheck} autoFocus>INICIAR RECONHECIMENTO</button>
@@ -482,8 +499,9 @@ function CommandBar() {
           <GearIcon />
         </button>
       </form>
-      {(recording || j.wake || cloudMic) && (
+      {(recording || j.wake || cloudMic || j.computer) && (
         <div className="flags">
+          {j.computer && <span className="cloud">● JARVIS CONTROLANDO O COMPUTADOR · TELA ENVIADA AO GEMINI · MEXA O MOUSE PARA PARAR{j.computer.step ? ` · PASSO ${j.computer.step}: ${j.computer.desc.toUpperCase()}` : ''}</span>}
           {recording && <span className="rec">● MICROFONE CAPTURANDO</span>}
           {j.wake && !recording && <span className="rec soft">● ESCUTA CONTÍNUA · {audio.inWindow ? 'PODE CONTINUAR FALANDO' : `DIGA “${(j.core?.voice.wake_word ?? 'jarvis').toUpperCase()}”`} · DETECÇÃO LOCAL</span>}
           {cloudMic && <span className="cloud">NUVEM · ÁUDIO ENVIADO AO GEMINI</span>}
@@ -566,7 +584,7 @@ export function Hud() {
       <div className={`cards pinned ${!online && pinned && stage ? 'show' : ''}`}><DemoWeatherCard /></div>
 
       {/* modo real: clima de fonte real e estado dos dispositivos à esquerda */}
-      <div className={`cards pinned ${online && stage ? 'show' : ''}`}><div className="side"><WeatherCard data={weather} /><Devices /></div></div>
+      <div className={`cards pinned ${online && stage ? 'show' : ''}`}><div className="side"><WeatherCard data={weather} /><AgendaCard /><Devices /></div></div>
       <div className={`cards ${real && inMap ? 'show' : ''}`}><WeatherCard big data={weather} /><NewsCard /></div>
       {real && stage && <ToolLog />}
 

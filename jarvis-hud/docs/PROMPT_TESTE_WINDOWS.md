@@ -1,7 +1,7 @@
-# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.4
+# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.5
 
 > Cole TUDO abaixo da linha em uma sessão do Claude Code (app Claude Desktop ou terminal) aberta
-> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.4.zip`
+> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.5.zip`
 > (se a 0.3 já estava instalada: descompacte por cima, mantendo `backend\.env`, `backend\config\permissions.json` e `backend\data\`)
 > (ou clonou o branch `ccr-41dc01f1-0wlbjp` do repositório MTM4T3US/logistica_crud — a pasta é `jarvis-hud`).
 > Antes de colar: crie `jarvis-hud\backend\.env` a partir de `.env.example` e cole **você mesmo** a
@@ -9,10 +9,13 @@
 
 ---
 
-Você é o engenheiro de testes do JARVIS OS 0.4 neste computador Windows. O código foi escrito e
+Você é o engenheiro de testes do JARVIS OS 0.5 neste computador Windows. O código foi escrito e
 testado em Linux na nuvem (testes automatizados, navegador headless com câmera falsa), mas **nada foi
 executado neste PC ainda**. Se uma sessão anterior já testou a 0.3 aqui, reaproveite o relatório dela e
-foque nas fases novas (9 a 12), repetindo só o que a atualização pode ter afetado. Sua missão: instalar, executar, testar com o hardware real, corrigir o que for
+foque nas fases novas (12 a 16 na 0.5; 9 a 11 se a 0.4 não foi testada por completo), repetindo só o que a
+atualização pode ter afetado. **Antes de tudo:** se a pasta da versão anterior tem correções suas que não
+estão neste pacote (veja `docs\RELATORIO_WINDOWS_*.md`), avise o usuário — elas precisam voltar para o
+repositório pelo patch (`PROMPT_EXPORTAR_CORRECOES`), não ser refeitas à mão. Sua missão: instalar, executar, testar com o hardware real, corrigir o que for
 simples e relatar com honestidade.
 
 ## Regras
@@ -183,9 +186,53 @@ para `backend\data\rosto.json`. Não fotografe o usuário nem salve quadros da c
 3. "Quais as novidades": clima real e manchetes reais (confira 2 links). Nada pode ser inventado.
 4. "Bloqueia o Jarvis": deve bloquear; nenhum comando de voz desbloqueia.
 
+## FASE 12 — Controle amplo do computador (0.5)
+
+Peça autorização ao usuário antes de cada bloco. Para cada comando, confira **na tela** se aconteceu o que
+o JARVIS disse:
+1. "abre o Word", "abre o Spotify", "abre a calculadora", "abre o WhatsApp": deve dizer "aberto" só se a
+   janela apareceu.
+2. "abre o site youtube.com", "pesquisa receita de pão de queijo no youtube", "abre as configurações de
+   bluetooth".
+3. "procura o arquivo <algo que exista>" → "abre o 1" → "mostra o 1 na pasta". Crie um arquivo de teste
+   para "manda o 1 para a lixeira" (deve pedir confirmação). Confira na Lixeira.
+4. "tira um print" (Imagens\JARVIS), "brilho da tela em 60" (notebook).
+5. Abra o Bloco de Notas: "digita: teste do JARVIS", "seleciona tudo", "copia".
+   Abra o PowerShell e tente "digita: dir": **deve recusar**.
+6. "fecha o bloco de notas" (confirmação), "bloqueia o computador" (o usuário desbloqueia).
+7. "desliga o computador" → confirme → **imediatamente** "cancela o desligamento". Não deixe desligar.
+
+## FASE 13 — Computer use (gasta cota: no máximo 2 tarefas)
+
+1. "Jarvis, usa o computador para abrir a calculadora e calcular 12 vezes 8": acompanhe e anote passos,
+   tempo e se acertou os cliques.
+2. Durante uma tarefa, mexa o mouse: deve parar e dizer por quê.
+3. Peça algo que envolva "enviar" (ex.: rascunho de e-mail sem destinatário real): deve pedir confirmação.
+   Negue.
+4. Relate a precisão dos cliques (escala do Windows 100/125/150 %).
+
+## FASE 14 — Agenda
+
+1. "marca dentista amanhã às 15h", "academia toda segunda às 8h", "o que eu tenho amanhã?", "desmarca o
+   dentista" (confirmação).
+2. Marque algo para daqui a 17 minutos e confira o lembrete falado (15 min antes).
+3. Bloqueie e entre de novo: as boas-vindas devem dizer os compromissos de hoje.
+
+## FASE 15 — Luzes Smart Life / Tuya
+
+1. `CONFIGURAR_LUZES.bat` com o usuário (ele cria a conta em iot.tuya.com e vincula o app). Nunca mostre as
+   chaves nem copie `devices.json` ou `tinytuya.json`.
+2. `CONFIGURAR_LUZES.bat --testar`: confirme com o usuário, olhando, que cada luz piscou.
+3. No JARVIS: "apaga as luzes", "acende a luz da sala", "luz do quarto em azul", "luzes a 30%". O JARVIS
+   diz "confirmado pelos aparelhos"; confirme olhando. Tire uma lâmpada da tomada e veja a mensagem.
+
+## FASE 16 — Fechadura
+
+Só se o firmware já estiver pronto (ver `docs\FECHADURA.md`). Caso contrário, anote NÃO-TESTADO.
+
 ## Entrega
 
-Crie `jarvis-hud\docs\RELATORIO_WINDOWS_0.4.md` com:
+Crie `jarvis-hud\docs\RELATORIO_WINDOWS_0.5.md` com:
 
 1. Tabela por item: Fase · Teste · Status (REAL-OK / REAL-FALHOU / SÓ-API / SIMULADO / NÃO-TESTADO) · Evidência.
 2. Problemas encontrados e correções aplicadas (arquivo e motivo).

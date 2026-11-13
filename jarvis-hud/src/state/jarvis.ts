@@ -43,7 +43,11 @@ export interface CoreState {
   face?: FaceGateState
   intro?: { music: boolean; music_name: string }
   map?: { ready: boolean; city: string; counts?: Record<string, number>; attribution?: string }
+  agenda?: AgendaData | null
+  home?: { note: string; lights: { id: string; name: string }[] }
 }
+export interface AgendaEvent { id: number; title: string; start: string; all_day: boolean; place: string; repeat: string; remind_min: number; duration_min: number }
+export interface AgendaData { today: AgendaEvent[]; upcoming: AgendaEvent[] }
 export interface FaceGateState { enrolled: boolean; enabled: boolean; active: boolean; unlocked: boolean; pin_set: boolean; threshold: number; liveness: string; samples: number; cooldown_s: number; antispoof_min: number }
 export interface Briefing { welcome: string; briefing: string; city: string; weather: Record<string, unknown> | null; headlines: { title: string; source: string; region: string; link: string }[] }
 export interface Line { id: number; role: 'user' | 'assistant'; text: string; source?: string; partial?: boolean; mode?: string; interrupted?: boolean }
@@ -79,13 +83,17 @@ interface JarvisState {
   briefing: Briefing | null
   /** mapa real da cidade (OpenStreetMap), quando já baixado */
   cityMap: CityData | null
+  /** modo computer use em andamento (tarefa, passo e o que está fazendo) */
+  computer: { task: string; step: number; desc: string } | null
+  /** agenda local (só chega com o JARVIS liberado) */
+  agenda: AgendaData | null
   set: (patch: Partial<JarvisState>) => void
 }
 
 export const useJarvis = create<JarvisState>((set) => ({
   conn: 'connecting', core: null, busy: false, activity: '', lines: [], tools: [], weather: null, system: null, devices: [], news: null,
   error: null, notice: null, confirm: null, mic: 'off', wake: false, consentAsk: false, continuousAsk: false, settingsOpen: false,
-  locked: false, briefing: null, cityMap: null,
+  locked: false, briefing: null, cityMap: null, computer: null, agenda: null,
   set: (patch) => set(patch),
 }))
 
@@ -204,7 +212,7 @@ export function handleEvent(ev: Record<string, any>) {
       const face: FaceGateState | undefined = ev.state.face
       const locked = !!face?.active && !face.unlocked
       const was = J().locked
-      useJarvis.setState({ core: ev.state, devices: ev.state.devices, conn: 'online', locked })
+      useJarvis.setState({ core: ev.state, devices: ev.state.devices, conn: 'online', locked, agenda: ev.state.agenda ?? null })
       audio.bargeIn = ev.state.runtime?.barge_in ?? true
       // já liberado: carrega (ou baixa, 1ª vez) o mapa real em segundo plano, sem avisos se falhar
       if (!locked) void loadCityMap(true)
@@ -319,6 +327,17 @@ export function handleEvent(ev: Record<string, any>) {
       break
     case 'devices':
       useJarvis.setState({ devices: ev.devices })
+      break
+    case 'agenda':
+      useJarvis.setState({ agenda: ev.agenda })
+      break
+    case 'reminder':
+      useJarvis.setState({ notice: { message: '⏰ ' + ev.text, ts: now } })
+      break
+    case 'computer':
+      if (ev.stage === 'start') useJarvis.setState({ computer: { task: ev.task, step: 0, desc: '' } })
+      else if (ev.stage === 'step') useJarvis.setState({ computer: { task: J().computer?.task ?? '', step: ev.step, desc: ev.description || ev.action } })
+      else useJarvis.setState({ computer: null })
       break
     case 'ui':
       if (ev.action === 'intro') { useJarvis.setState({ briefing: ev.briefing }); void loadCityMap() }

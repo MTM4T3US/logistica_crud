@@ -65,7 +65,9 @@ class RoutineEntry:
 
 
 #: ferramentas que uma rotina pode encadear (nada além disso — nunca ações destrutivas)
-ROUTINE_TOOLS = {"open_app", "open_folder", "open_project", "set_volume", "media_control", "window_control", "set_lights"}
+PC_DEFAULTS = {"apps": True, "web": True, "settings": True, "files": True, "teclado": True, "screenshot": True,
+               "brightness": True, "power": True, "computer_use": True}
+ROUTINE_TOOLS = {"open_app", "open_folder", "open_project", "set_volume", "media_control", "window_control", "set_lights", "house_lights", "launch_app", "open_website"}
 
 _SHELL_META = set("&|;<>`$\n\r")
 
@@ -87,6 +89,8 @@ class Permissions:
     window_control: bool = True
     #: fechar janelas pode perder trabalho não salvo: sempre exige confirmação específica
     close_windows: bool = False
+    #: 0.5 — controle amplo do computador (escolha do usuário: amplo com confirmação). false desliga cada parte.
+    pc: dict[str, bool] = field(default_factory=lambda: dict(PC_DEFAULTS))
     source: str = "padrão (vazio)"
 
     @classmethod
@@ -128,6 +132,8 @@ class Permissions:
         perms.media_control = bool(raw.get("media_control", True))
         perms.window_control = bool(raw.get("window_control", True))
         perms.close_windows = bool(raw.get("close_windows", False))
+        pc = raw.get("pc_control") if isinstance(raw.get("pc_control"), dict) else {}
+        perms.pc = {k: bool(pc.get(k, v)) for k, v in PC_DEFAULTS.items()}
         return perms
 
     def summary(self) -> dict[str, Any]:
@@ -139,6 +145,7 @@ class Permissions:
             "projects": [{"id": p.id, "name": p.name} for p in self.projects.values()],
             "scenes": [{"id": c.id, "name": c.name} for c in self.scenes.values()],
             "media_control": self.media_control, "window_control": self.window_control, "close_windows": self.close_windows,
+            "pc_control": dict(self.pc),
             "volume_control": self.volume_control,
             "process_list": self.process_list,
         }

@@ -1,4 +1,4 @@
-# JARVIS OS 0.4
+# JARVIS OS 0.5
 
 Assistente pessoal com interface holográfica: um HUD em React + Three.js e um núcleo local em
 Python (FastAPI) que conversa pelo Google Gemini, fala, ouve e consulta dados reais do
@@ -6,7 +6,7 @@ computador e de Itumbiara-GO.
 
 Esta pasta é independente do CRUD de logística que está na raiz do repositório.
 
-> **Estado (0.4):** escrita e testada em Linux na nuvem (testes automáticos do núcleo, navegador com
+> **Estado (0.5):** escrita e testada em Linux na nuvem (247 testes automáticos do núcleo, navegador com
 > câmera falsa). **Ainda não foi executada no Windows**, com a sua webcam, o seu microfone nem a fita de LED
 > real. Roteiro de teste no PC: [`docs/PROMPT_TESTE_WINDOWS.md`](docs/PROMPT_TESTE_WINDOWS.md); o que é real,
 > simulado ou pendente: [`docs/RELATORIO_0.4.md`](docs/RELATORIO_0.4.md) e [`docs/RELATORIO_0.3.md`](docs/RELATORIO_0.3.md).
@@ -23,9 +23,14 @@ Esta pasta é independente do CRUD de logística que está na raiz do repositór
 | CPU, RAM, disco, processos | Reais (psutil). |
 | Abrir apps/pastas/projetos, volume, mídia, janelas, rotinas | Windows, só para itens de `backend/config/permissions.json` (não testado em Windows ainda). |
 | LEDs | Driver real ELK-BLEDDM por Bluetooth (`JARVIS_LEDS=bluetooth`) ou simulador (padrão). Não testado com a fita ainda. |
-| Persiana, fechadura, robô | **Simuladores.** Nenhum hardware é acionado. |
+| Persiana, robô | **Simuladores.** Nenhum hardware é acionado. |
 | Entrada por rosto | Real, no navegador: câmera local, malha de 468 pontos, piscar, descritor comparado pelo núcleo; PIN reserva. Nenhuma imagem é gravada. Na demonstração (teclas 1–6) continua encenada e marcada DEMO. |
 | Música de entrada | Arquivo do próprio usuário, guardado só no PC; abaixa sob a voz. |
+| Computador (0.5) | Qualquer programa instalado, sites, arquivos, digitar/atalhos, captura, brilho, bloquear/suspender/desligar (com confirmação). Sem terminal. |
+| Computer use (0.5) | Vê a tela e usa mouse/teclado via Gemini (autorização por tarefa; ~1 pedido de IA por passo). |
+| Agenda (0.5) | Local; frases em português; lembretes; dita nas boas-vindas. |
+| Luzes de casa (0.5) | Smart Life/Tuya pela rede local (as lâmpadas confirmam). Configuração: `CONFIGURAR_LUZES.bat`. |
+| Fechadura (0.5) | Só trancar e ver o estado, protocolo assinado ([`docs/FECHADURA.md`](docs/FECHADURA.md)); simulador até parear. |
 | Mapa 3D | Itumbiara real (OpenStreetMap, baixado uma vez e guardado no PC). Sem o mapa baixado: cidade fictícia, identificada na tela. |
 | Notícias | Google Notícias de Itumbiara e do Brasil (feeds RSS, sem inventar manchetes). `JARVIS_NEWS_FEEDS=off` desliga. |
 
@@ -159,6 +164,8 @@ evidence/               capturas da 0.1, 0.2 e 0.2.1; amostras de voz em evidenc
 
 ## Documentação
 
+- [`docs/RELATORIO_0.5.md`](docs/RELATORIO_0.5.md) — computador, computer use, agenda, luzes de casa e fechadura.
+- [`docs/FECHADURA.md`](docs/FECHADURA.md) — protocolo da fechadura própria (só trancar e ver).
 - [`docs/RELATORIO_0.4.md`](docs/RELATORIO_0.4.md) — entrada por rosto, música, resumo e mapa reais: o que foi testado e como.
 - [`docs/RELATORIO_0.3.md`](docs/RELATORIO_0.3.md) — o que a 0.3 fez, status por item (real, só API, dublê, simulado, pendente).
 - [`docs/WINDOWS_0.3.md`](docs/WINDOWS_0.3.md) — instalação e uso no Windows; [`docs/PROMPT_TESTE_WINDOWS.md`](docs/PROMPT_TESTE_WINDOWS.md) — roteiro de teste no PC.
@@ -175,5 +182,5 @@ evidence/               capturas da 0.1, 0.2 e 0.2.1; amostras de voz em evidenc
 Tudo na cena é gerado por código. Malha do rosto: modelo canônico do MediaPipe Face Mesh (Google,
 Apache 2.0). Reconhecimento facial: [Human](https://github.com/vladmandic/human) (MIT) e os modelos que
 ele inclui. Mapa: © colaboradores do [OpenStreetMap](https://www.openstreetmap.org/copyright) (ODbL).
-Notícias: Google Notícias (RSS). Fontes: Orbitron e Rajdhani (SIL OFL). Dados meteorológicos:
+Notícias: Google Notícias (RSS). Luzes: [tinytuya](https://github.com/jasonacox/tinytuya) (MIT). Fontes: Orbitron e Rajdhani (SIL OFL). Dados meteorológicos:
 [Open-Meteo](https://open-meteo.com) (CC BY 4.0), gratuito para uso não comercial.

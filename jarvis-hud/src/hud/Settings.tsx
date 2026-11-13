@@ -230,6 +230,13 @@ export function Settings() {
           </section>
 
           <Entrance core={core} />
+          <AgendaSection />
+          <section>
+            <h3>LUZES DE CASA</h3>
+            <p className={core.home?.lights.length ? 'good' : 'dim'}>{core.home?.note ?? 'Sem informação.'}</p>
+            {!!core.home?.lights.length && <p className="dim">{core.home.lights.map((l) => l.name).join(' · ')}</p>}
+            <p className="dim">Smart Life / Tuya pela rede de casa, sem nuvem. Para configurar: CONFIGURAR_LUZES.bat (uma vez). Por voz: “apaga as luzes”, “luz da sala em azul”, “luzes a 30%”. As lâmpadas confirmam cada comando; a fita de LED não.</p>
+          </section>
 
           <section>
             <h3>PRIVACIDADE</h3>
@@ -444,5 +451,45 @@ function Entrance({ core }: { core: CoreState }) {
         {msg && <p className="warn">{msg}</p>}
       </section>
     </>
+  )
+}
+
+/** Agenda local: marcar com uma frase ("dentista amanhã às 15h") e desmarcar. */
+function AgendaSection() {
+  const agenda = useJarvis((s) => s.agenda)
+  const [phrase, setPhrase] = useState('')
+  const [msg, setMsg] = useState('')
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!phrase.trim()) return
+    try { const r = await api<{ message: string }>('/api/agenda', { method: 'POST', body: JSON.stringify({ phrase: phrase.trim() }) }); setMsg(r.message); setPhrase('') } catch (err) { setMsg((err as Error).message) }
+  }
+  const del = async (id: number, title: string) => {
+    if (!window.confirm(`Desmarcar “${title}”?`)) return
+    try { await api(`/api/agenda/${id}`, { method: 'DELETE' }); setMsg(`Desmarcado: ${title}.`) } catch (err) { setMsg((err as Error).message) }
+  }
+  const when = (iso: string, allDay: boolean) => {
+    const d = new Date(iso + ':00')
+    const day = d.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' })
+    return allDay ? day : `${day} ${iso.slice(11, 16)}`
+  }
+  const seen = new Set<number>()
+  const list = (agenda?.upcoming ?? []).filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
+  return (
+    <section>
+      <h3>AGENDA</h3>
+      <form className="row" onSubmit={add}>
+        <input type="text" value={phrase} onChange={(e) => setPhrase(e.target.value)} maxLength={200} placeholder="ex.: dentista amanhã às 15h" aria-label="Novo compromisso" />
+        <button type="submit" disabled={!phrase.trim()}>Marcar</button>
+      </form>
+      <ul className="agenda-list">
+        {list.length === 0 && <li className="dim">Nenhum compromisso nos próximos 14 dias.</li>}
+        {list.map((e) => (
+          <li key={e.id}><span>{e.title} <small>{when(e.start, e.all_day)}{e.repeat ? ` · ${e.repeat.replace('_', ' ')}` : ''}</small></span><button className="danger" onClick={() => void del(e.id, e.title)}>Desmarcar</button></li>
+        ))}
+      </ul>
+      <p className="dim">Fica só neste computador (backend/data/agenda.sqlite3). Por voz: “marca …”, “o que eu tenho hoje?”, “desmarca …”. Lembrete 15 min antes; as boas-vindas dizem os compromissos do dia.</p>
+      {msg && <p className="good">{msg}</p>}
+    </section>
   )
 }

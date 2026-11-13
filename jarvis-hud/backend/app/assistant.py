@@ -25,6 +25,16 @@ from .security.permissions import Permissions
 from .services.local_info import local_now
 from .services.briefing import compose as compose_briefing
 from .services.citymap import CityMap
+from .ai.pc_tools import PcTools
+from .ai.agenda_tools import AgendaTools
+from .ai.home_tools import HomeTools
+from .devices.tuya import build_lights
+from .devices.own_lock import OwnLock, load_config as load_lock_config
+from .services.agenda import Agenda
+from .ai.computer_agent import ComputerAgent, gemini_asker
+from .system.windows import ActionResult
+from .system.desktop import Desktop
+from .system.screen_input import ScreenInput, get_screen_input
 from .services.news import NewsService, default_feeds
 from .security.face_gate import FaceGate
 from .services.weather import WeatherService
@@ -36,7 +46,7 @@ from .voice.wake import WakeDetector, make_wake_detector
 from .router import LocalRouter
 from .voice.tts import STYLES, GeminiTTS, LocalTTS, PiperTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 MAX_TOOL_ROUNDS = 6
 CONFIRM_TIMEOUT_S = 45.0
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -101,6 +111,7 @@ class Assistant:
         perms: Permissions | None = None, controller: SystemController | None = None, monitor: SystemMonitor | None = None,
         devices: DeviceRegistry | None = None, weather: WeatherService | None = None, news: NewsService | None = None,
         tts: VoiceOutput | None = None, stt: VoiceInput | None = None, wake: WakeDetector | None | bool = True,
+        desktop: Desktop | None = None, screen: ScreenInput | None = None,
     ):
         self.settings = settings
         self.data_dir = settings.db_path.parent
@@ -130,10 +141,41 @@ class Assistant:
             weather=self.weather, news=self.news, memory=self.memory, memory_enabled=lambda: bool(self.runtime()["memory_enabled"]),
             briefing=self.briefing, lock=self._lock_from_tool, map_status=lambda: self.citymap.status(),
         )
-        self.router = LocalRouter(self.perms, lambda: set(self.tools.specs()), settings.wake_word)
+        # 0.5: controle amplo do computador (só existe de fato no Windows)
+        self.screen = screen if screen is not None else get_screen_input()
+        self.desktop = desktop if desktop is not None else Desktop(win=getattr(self.controller, "win", None))
+        self.pc_tools = PcTools(self.desktop, self.screen, lambda k: bool(self.perms.pc.get(k, False)), agent=self._computer_agent)
+        self.tools.extensions.append(self.pc_tools.specs)
+        # 0.5: agenda pessoal (local)
+        self.agenda = Agenda(self.data_dir / "agenda.sqlite3" if str(settings.db_path) != ":memory:" else ":memory:", settings.location.timezone)
+        self.tools.extensions.append(AgendaTools(self.agenda).specs)
+        self.conns: set[Connection] = set()
+        self._reminders: asyncio.Task | None = None
+        # 0.5: luzes de casa Smart Life/Tuya (rede local)
+        lights, self.home_note = build_lights(settings.tuya_devices or self.data_dir / "tuya" / "devices.json")
+        # 0.5: fechadura do usuário (só trancar e ver), quando pareada com scripts/parear_fechadura.py
+        lock_cfg = load_lock_config(self.data_dir / "fechadura.json")
+        if lock_cfg:
+            self.devices.register(OwnLock(lock_cfg["url"], bytes.fromhex(lock_cfg["secret"])))
+        for light in lights:
+            self.devices.register(light)
+        self.home = HomeTools(self.devices)
+        self.tools.extensions.append(self.home.specs)
+        self.router = LocalRouter(self.perms, lambda: set(self.tools.specs()), settings.wake_word,
+                                  lights=lambda: [(d.id, d.name) for d in self.home.lights()])
         self.local = LocalProvider(self.router)
         self.last_ai_error: dict[str, str] | None = None
         self.last_timings: dict[str, float] | None = None
+
+    def _computer_agent(self) -> ComputerAgent | None:
+        if self.gemini is None or self.screen is None:
+            return None
+
+        def open_by_name(name: str) -> Any:
+            app, _ = self.desktop.find_app(name)
+            return self.desktop.launch(app) if app else ActionResult(False, False, f"Não encontrei “{name}”.")
+
+        return ComputerAgent(self.screen, gemini_asker(self.gemini), open_app=open_by_name, open_url=self.desktop.open_url)
 
     def _lock_from_tool(self) -> bool:
         if not self.gate.active:
@@ -157,7 +199,14 @@ class Assistant:
             return DeviceRegistry(simulators=settings.devices_simulators, leds=ElkBleddmLeds(settings.led_address, settings.led_name_prefix, brightness_mode=settings.led_brightness))
         return DeviceRegistry(simulators=settings.devices_simulators, leds_off=settings.leds_mode == "off")
 
+    async def shutdown(self) -> None:
+        if self._reminders:
+            self._reminders.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._reminders
+
     async def startup(self) -> None:
+        self._reminders = asyncio.create_task(self._reminder_loop())
         if self.gemini:
             await self.gemini.resolve_models()
             self._apply_models(self.runtime())
@@ -250,6 +299,9 @@ class Assistant:
             "weather_enabled": self.settings.weather_enabled,
             "face": self.gate.status(),
             "map": self.citymap.status(),
+            # com o JARVIS bloqueado, a agenda não sai do núcleo
+            "agenda": self.agenda_state() if self.gate.open else None,
+            "home": {"note": self.home_note, "lights": [{"id": d.id, "name": d.name} for d in self.home.lights()]},
             "intro": {"music": self.intro_music() is not None, "music_name": (self.memory.get_setting("intro_music", {}) or {}).get("name", "")},
         }
 
@@ -564,13 +616,38 @@ class Assistant:
         self.memory.set_setting("intro_music", {})
 
     async def briefing(self) -> dict[str, Any]:
-        """Clima e notícias reais da cidade, em texto pronto para falar."""
+        """Clima, notícias reais da cidade e os compromissos de hoje, em texto pronto para falar."""
         async def nothing() -> None:
             return None
 
         rt = self.runtime()
         weather, news = await asyncio.gather(self.weather.get(), self.news.get() if self.news.enabled else nothing())
-        return compose_briefing(local_now(self.settings.location), self.settings.location.city, rt["user_title"], weather, news)
+        today = await asyncio.to_thread(self.agenda.today, True)
+        return compose_briefing(local_now(self.settings.location), self.settings.location.city, rt["user_title"], weather, news,
+                                agenda_text=self.agenda.say_day(today), agenda=[Agenda.public(e) for e in today])
+
+    def agenda_state(self) -> dict[str, Any]:
+        return {"today": [Agenda.public(e) for e in self.agenda.today()], "upcoming": [Agenda.public(e) for e in self.agenda.upcoming(14)]}
+
+    async def _reminder_loop(self) -> None:
+        """A cada 30 s: lembretes vencidos viram aviso no HUD e fala (detalhes só com o JARVIS liberado)."""
+        while True:
+            await asyncio.sleep(30)
+            try:
+                due = await asyncio.to_thread(self.agenda.due_reminders)
+            except Exception:
+                continue
+            for ev in due:
+                mins = max(1, round((ev["start"] - self.agenda.now()).total_seconds() / 60))
+                private = not self.gate.open
+                title = self.runtime()["user_title"]
+                text = (f"{title.capitalize()}, você tem um lembrete." if private
+                        else f"Lembrete, {title}: {ev['title']}, em {mins} minuto{'s' if mins > 1 else ''}.")
+                for conn in list(self.conns):
+                    with contextlib.suppress(Exception):
+                        await conn.send({"type": "reminder", "text": text, "event": None if private else Agenda.public(ev)})
+                        if conn.turn is None or conn.turn.done():
+                            conn.turn = asyncio.create_task(self.speak_text(conn, f"lembrete-{uuid.uuid4().hex[:6]}", text, mode="lembrete"))
 
     async def speak_text(self, conn: Connection, turn: str, text: str, mode: str = "intro") -> None:
         """Fala um texto pronto (sem IA), pela mesma cadeia de voz das respostas: 1 pedido de voz por bloco."""

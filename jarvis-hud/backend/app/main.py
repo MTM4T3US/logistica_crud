@@ -11,6 +11,7 @@ import os
 import binascii
 import contextlib
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
     async def lifespan(_: FastAPI):
         await core.startup()
         yield
+        await core.shutdown()
 
     app = FastAPI(title="JARVIS Core", version=VERSION, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.core, app.state.auth, app.state.settings = core, auth, settings
@@ -179,6 +181,43 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
         data = await core.citymap.get(force=force)
         return Response(_json.dumps(data, separators=(",", ":")), media_type="application/json")
 
+    @app.get("/api/agenda")
+    async def agenda_list(days: int = 14) -> dict[str, Any]:
+        from .services.agenda import Agenda as _A
+
+        now = core.agenda.now()
+        evs = await asyncio.to_thread(core.agenda.occurrences, now.date(), now.date() + timedelta(days=max(1, min(days, 90))))
+        return {"events": [_A.public(e) for e in evs], "all": [_A.public(e) for e in await asyncio.to_thread(core.agenda.all)]}
+
+    @app.post("/api/agenda")
+    async def agenda_add(body: dict[str, Any]) -> dict[str, Any]:
+        from .ai.agenda_tools import AgendaTools
+        from .ai.base import ToolCall
+
+        class Run:
+            call = ToolCall("painel", "agenda_add", body)
+
+            @staticmethod
+            async def notify(ev: dict[str, Any]) -> None:
+                for c in list(core.conns):
+                    with contextlib.suppress(Exception):
+                        await c.send(ev)
+
+        allowed = {k: body[k] for k in ("title", "date", "time", "repeat", "remind_min", "duration_min", "place", "phrase") if k in body}
+        out = await AgendaTools(core.agenda)._add(allowed, Run)
+        if not out.ok:
+            raise HTTPException(status_code=400, detail={"message": out.summary})
+        return {"ok": True, "message": out.summary, **out.data}
+
+    @app.delete("/api/agenda/{event_id}")
+    async def agenda_delete(event_id: int) -> dict[str, Any]:
+        """Apagar pelo painel já é a confirmação (o botão pede "tem certeza?")."""
+        ok = await asyncio.to_thread(core.agenda.remove, event_id)
+        for c in list(core.conns):
+            with contextlib.suppress(Exception):
+                await c.send({"type": "agenda", "agenda": core.agenda_state()})
+        return {"ok": ok}
+
     @app.get("/api/briefing")
     async def briefing() -> dict[str, Any]:
         return await core.briefing()
@@ -195,6 +234,7 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
         conn = Connection(ws)
         core.gate.connection_opened(app.state.conns)
         app.state.conns += 1
+        core.conns.add(conn)
         await conn.send({"type": "hello", "version": VERSION, "state": await core.state()})
         feeder = asyncio.create_task(_feed(conn, core))
         try:
@@ -267,6 +307,7 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
             feeder.cancel()
             await conn.cancel_turn()
             app.state.conns = max(0, app.state.conns - 1)
+            core.conns.discard(conn)
             core.gate.connection_closed(app.state.conns)
 
     dist = PROJECT_DIR / "dist"

@@ -69,12 +69,14 @@ def _news_text(news: dict[str, Any] | None, city: str) -> tuple[str, list[dict[s
     return " ".join(parts), used
 
 
-def compose(now: dict[str, Any], city: str, title: str, weather: dict[str, Any] | None, news: dict[str, Any] | None) -> dict[str, Any]:
+def compose(now: dict[str, Any], city: str, title: str, weather: dict[str, Any] | None, news: dict[str, Any] | None,
+            agenda_text: str = "", agenda: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     news_text, headlines = _news_text(news, city)
     briefing = " ".join(x for x in (_weather_text(city, weather), news_text, f"Em que posso ajudar, {title}?") if x)
     w = weather if weather and weather.get("ok") else None
     return {
-        "welcome": welcome_text(now, title),
+        "welcome": (welcome_text(now, title) + (" " + agenda_text if agenda_text else "")).strip(),
+        "agenda": agenda or [],
         "briefing": briefing,
         "city": city,
         "weather": {k: w.get(k) for k in ("temperature_c", "condition", "humidity", "wind_kmh", "today", "fetched_at_text", "stale")} if w else None,

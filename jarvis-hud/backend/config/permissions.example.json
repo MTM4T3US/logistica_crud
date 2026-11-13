@@ -167,5 +167,17 @@
   ],
   "media_control": true,
   "window_control": true,
-  "close_windows": false
+  "close_windows": false,
+  "pc_control": {
+    "_comentario": "0.5: controle amplo do computador. Fechar, encerrar, apagar (Lixeira), suspender, desligar e reiniciar sempre pedem confirmação. Ponha false para desligar uma parte.",
+    "apps": true,
+    "web": true,
+    "settings": true,
+    "files": true,
+    "teclado": true,
+    "screenshot": true,
+    "brightness": true,
+    "power": true,
+    "computer_use": true
+  }
 }

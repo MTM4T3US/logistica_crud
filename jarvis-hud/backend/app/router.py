@@ -14,6 +14,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from datetime import datetime
+
+from .services.agenda import parse_event
+from .system.desktop import SETTINGS_PAGES
 from .ai.base import ToolCall, ToolOutcome
 from .security.permissions import Permissions
 
@@ -34,7 +38,8 @@ NUM_WORDS = {"zero": 0, "dez": 10, "vinte": 20, "trinta": 30, "quarenta": 40, "c
 def fold(text: str) -> str:
     text = unicodedata.normalize("NFD", text.lower())
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
-    return re.sub(r"\s+", " ", re.sub(r"[!?.;]+", " ", text)).strip()
+    # pontos entre letras ficam (sites como youtube.com); os de fim de frase saem
+    return re.sub(r"\s+", " ", re.sub(r"[!?;]+|\.(?!\w)|(?<!\w)\.", " ", text)).strip()
 
 
 def _n(v: Any) -> str:
@@ -51,8 +56,8 @@ class Plan:
     chat: bool = False
 
 
-def _call(name: str, **args: Any) -> ToolCall:
-    return ToolCall(id="local-" + uuid.uuid4().hex[:8], name=name, args=args)
+def _call(_tool: str, **args: Any) -> ToolCall:
+    return ToolCall(id="local-" + uuid.uuid4().hex[:8], name=_tool, args=args)
 
 
 def _report(ok_text: str) -> Callable[[list[ToolOutcome], str], str]:
@@ -74,9 +79,12 @@ def _report(ok_text: str) -> Callable[[list[ToolOutcome], str], str]:
 
 
 class LocalRouter:
-    def __init__(self, perms: Permissions, tool_names: Callable[[], set[str]], wake_word: str = "jarvis"):
+    def __init__(self, perms: Permissions, tool_names: Callable[[], set[str]], wake_word: str = "jarvis",
+                 lights: Callable[[], list[tuple[str, str]]] | None = None):
         self.perms = perms
         self.tool_names = tool_names
+        #: luzes de casa (id, nome) — para "luz da sala"
+        self.lights = lights or (lambda: [])
         self.wake = fold(wake_word)
 
     # ------------------------------------------------------------------ entrada
@@ -117,6 +125,20 @@ class LocalRouter:
                 names = {fold(r.name), fold(rid), f"modo {fold(rid)}"}
                 if any(re.search(rf"\b{re.escape(n)}\b", t) for n in names) or (rid == "programar" and re.search(r"\bprepar\w* .*program", t)):
                     return Plan("routine", [_call("run_routine", routine_id=rid)], _report(f"Rotina “{r.name}” executada, {{title}}."))
+        # ---- fechadura: trancar e ver (destrancar por voz não existe)
+        if "control_device" in tools and re.search(r"\b(porta|fechadura)\b", t):
+            if re.search(r"\b(destranc\w*|abr\w*|libera\w*)\b", t):
+                return Plan("lock", [], lambda o, title: f"Destrancar por voz não é permitido, {title}. Use o teclado, a digital ou a chave da fechadura.")
+            if re.search(r"\b(tranc\w*|fech\w*)\b", t) and not re.search(r"\b(esta|ta|ficou)\b.*\btrancad", t):
+                return Plan("lock", [_call("control_device", device_id="fechadura", action="lock")], lambda o, title: o[0].summary)
+            if re.search(r"\b(trancad\w*|aberta|estado|status|como esta)\b", t):
+                return Plan("lock", [_call("control_device", device_id="fechadura", action="status")], lambda o, title: o[0].summary)
+        # ---- luzes de casa (Tuya) — "leds"/"fita" continuam indo só para a fita
+        if "house_lights" in tools and not re.search(r"\b(led|leds|fita)\b", t) and (
+                re.search(r"\b(luz|luzes|lampada|lampadas|iluminacao|abajur|luminaria)\b", t) or self._light_hits(t)[1] > 0):
+            plan = self._house(t)
+            if plan:
+                return plan
         # ---- luzes
         if "set_lights" in tools and re.search(r"\b(luz|luzes|led|leds|fita|lampada|iluminacao)\b|\bmodo cinema\b", t):
             plan = self._lights(t)
@@ -135,6 +157,14 @@ class LocalRouter:
             plan = self._volume(t)
             if plan:
                 return plan
+        # ---- agenda (0.5)
+        plan = self._agenda(t, tools)
+        if plan:
+            return plan
+        # ---- computador (0.5): energia, brilho, captura, arquivos, sites, programas, teclado
+        plan = self._pc(t, tools)
+        if plan:
+            return plan
         # ---- janelas
         if "window_control" in tools and re.search(r"\b(janela|janelas|lado a lado|area de trabalho|minimiz|maximiz|alterna|fecha)\w*", t):
             plan = self._windows(t)
@@ -166,6 +196,44 @@ class LocalRouter:
         if allow_chat and re.fullmatch(r"(bom dia|boa tarde|boa noite|ola|oi|e ai|tudo bem|como vai)( \w+)?", t):
             return Plan("chat", [_call("get_local_time")], lambda o, title: f"{o[0].data['greeting'] if o[0].ok else 'Olá'}, {title}. Estou sem acesso à inteligência artificial agora, mas os comandos locais seguem funcionando.", chat=True)
         return None
+
+    def _light_hits(self, t: str) -> tuple[list[str], int]:
+        """Luzes cujo nome aparece na frase (pelo maior número de palavras em comum)."""
+        generic = {"luz", "luzes", "lampada", "lampadas", "de", "da", "do", "das", "dos", "e", "a", "o"}
+        scored: list[tuple[int, str]] = []
+        for dev_id, name in self.lights():
+            words = [w for w in re.split(r"[\s_]+", fold(name)) if w and w not in generic]
+            hits = sum(1 for w in words if re.search(rf"\b{re.escape(w)}\b", t))
+            if hits:
+                scored.append((hits, dev_id))
+        if not scored:
+            return [], 0
+        top = max(h for h, _ in scored)
+        return [d for h, d in scored if h == top], top
+
+    def _house(self, t: str) -> Plan | None:
+        hits, _ = self._light_hits(t)
+        if len(hits) > 1:
+            return None                      # dois aparelhos com o mesmo nome: melhor perguntar do que chutar
+        args: dict[str, Any] = {"target": hits[0] if hits else "todas"}
+        if re.search(r"\b(desliga|desligue|desligar|apaga|apague|apagar)\b", t):
+            args["power"] = "off"
+        else:
+            m = re.search(r"\b(\d{1,3}) ?(%|por cento)|\bbrilho\b\D*(\d{1,3})", t)
+            if m:
+                args["brightness"] = max(1, min(100, int(m.group(1) or m.group(3))))
+            if re.search(r"\b(branca|branco|luz branca)\b", t):
+                args["white"] = True
+            else:
+                for name, hexv in sorted(COLORS.items(), key=lambda kv: -len(kv[0])):
+                    if re.search(rf"\b{name}\b", t):
+                        args["color"] = hexv
+                        break
+            if re.search(r"\b(liga|ligue|ligar|acende|acenda|acender)\b", t) or len(args) == 1:
+                args["power"] = "on"
+        if len(args) == 1:
+            return None
+        return Plan("lights", [_call("house_lights", **args)], lambda o, title: o[0].summary)
 
     def _lights(self, t: str) -> Plan | None:
         if re.search(r"\bmodo cinema\b", t) and "cinema" in self.perms.scenes and "cinema" not in self.perms.routines:
@@ -241,6 +309,116 @@ class LocalRouter:
                 words = APP_WORDS.get(aid, []) + [fold(app.name), aid.replace("_", " ")]
                 if any(re.search(rf"\b{re.escape(w)}\b", t) for w in words):
                     return Plan("app", [_call("open_app", app_id=aid)], _report(f"{app.name} aberto, {{title}}."))
+        if "launch_app" in tools:
+            # 0.5: qualquer programa instalado (o nome é procurado no Menu Iniciar, não executado)
+            m = re.search(r"\b(?:abr[aei]\w*|inici[ae]\w*|execut[ae]\w*|lanc[ae]\w*)\s+(?:o |a |os |as )?(?:programa |aplicativo |app )?(.+)$", t)
+            name = m.group(1).strip() if m else ""
+            if name and not re.search(r"\b(mapa|cidade|projeto|pasta|site|arquivo|janela|configurac\w*)\b|\.\w{2,3}\b|^(o|a|os|as)?\s*\d+$", name):
+                return Plan("app", [_call("launch_app", name=name[:60])], _report("{title}, " + name + " aberto."))
+        return None
+
+    def _agenda(self, t: str, tools: set[str]) -> Plan | None:
+        if "agenda_list" in tools:
+            if re.search(r"\b(minha agenda|meus compromissos|meus horarios|o que (eu )?tenho|tenho (algum|alguma|compromisso)\w*|agenda (de|da|do|pra|para))\b|^agenda$|\bcompromissos (de|da|pra|para)\b", t):
+                if re.search(r"\bsemana\b", t):
+                    return Plan("agenda", [_call("agenda_list", days=7)], lambda o, title: o[0].summary)
+                day = "amanha" if re.search(r"\bamanha\b", t) else "hoje"
+                return Plan("agenda", [_call("agenda_list", day=day)], lambda o, title: o[0].summary)
+        if "agenda_add" in tools:
+            m = re.match(r"^(?:marc\w*|agend\w*|anot\w*|lembr\w*|me lembr\w*|cri\w*|adicion\w*)\b(?: na (?:minha )?agenda| um compromisso| compromisso| um lembrete| lembrete| um evento| evento)?(?: de| que| pra| para)?\s+(.+)$", t)
+            if m and parse_event(m.group(1), datetime.now()) is not None:      # sem data/hora: não é agenda (ex.: "lembra que…")
+                return Plan("agenda", [_call("agenda_add", phrase=m.group(1)[:200])], lambda o, title: o[0].summary)
+        if "agenda_remove" in tools and re.search(r"\b(agenda|compromisso|lembrete|evento|desmarc\w*)\b", t):
+            m = re.match(r"^(?:cancel\w*|desmarc\w*|apag\w*|remov\w*|exclu\w*|tir\w*)\b(?: o| a)?(?: compromisso| lembrete| evento)?(?: d[oae])?\s+(.+?)(?: da (?:minha )?agenda)?$", t)
+            if m:
+                return Plan("agenda", [_call("agenda_remove", query=m.group(1)[:80])], lambda o, title: o[0].summary)
+        return None
+
+    ORDINALS = {"primeiro": 1, "segundo": 2, "terceiro": 3, "quarto": 4, "quinto": 5, "sexto": 6, "setimo": 7, "oitavo": 8, "nono": 9, "decimo": 10}
+    KEY_WORDS = {"copia": "ctrl+c", "copie": "ctrl+c", "cola": "ctrl+v", "cole": "ctrl+v", "recorta": "ctrl+x", "desfaz": "ctrl+z", "desfaca": "ctrl+z",
+                 "refaz": "ctrl+y", "salva": "ctrl+s", "salve": "ctrl+s", "seleciona tudo": "ctrl+a", "nova aba": "ctrl+t", "atualiza a pagina": "f5",
+                 "tela cheia": "f11", "troca de janela": "alt+tab", "proxima aba": "ctrl+tab"}
+
+    def _pc(self, t: str, tools: set[str]) -> Plan | None:
+        pc = r"\b(computador|pc|maquina|notebook|windows)\b"
+        if "computer_task" in tools:
+            m = re.search(r"^(?:usa|use|usar) (?:o )?(?:computador|pc) (?:para|pra|e) (.+)$|^(?:no computador|faz no computador|faca no computador)[, ]+(.+)$|^assum\w* o controle (?:e|para|pra) (.+)$", t)
+            if m:
+                task = next(g for g in m.groups() if g)
+                return Plan("pc", [_call("computer_task", task=task[:500])], lambda o, title: o[0].summary)
+        if "cancel_shutdown" in tools and re.search(r"\bcancel\w* (o )?(desligamento|reinicio)\b|\bnao (desliga|reinicia)\b", t):
+            return Plan("pc", [_call("cancel_shutdown")], _report("Desligamento cancelado, {title}."))
+        if "shutdown_pc" in tools and re.search(pc, t):
+            if re.search(r"\breinici\w*\b", t):
+                return Plan("pc", [_call("shutdown_pc", restart=True)], _report("Reiniciando em um minuto, {title}."))
+            if re.search(r"\b(deslig\w*)\b", t):
+                return Plan("pc", [_call("shutdown_pc", restart=False)], _report("Desligando em um minuto, {title}."))
+        if "sleep_pc" in tools and re.search(r"\b(suspend\w*|hibern\w*|suspensao)\b", t):
+            return Plan("pc", [_call("sleep_pc")], _report("Suspendendo, {title}."))
+        if "lock_windows" in tools and re.search(r"\b(bloque\w*|trav\w*)\b", t) and re.search(pc, t):
+            return Plan("pc", [_call("lock_windows")], _report("Windows bloqueado."))
+        if "set_brightness" in tools and re.search(r"\bbrilho\b", t) and re.search(r"\b(tela|monitor|notebook|display)\b", t):
+            m = re.search(r"(\d{1,3})", t)
+            word = next((v for k, v in NUM_WORDS.items() if re.search(rf"\b{k}\b", t)), None)
+            if m or word is not None:
+                value = max(0, min(100, int(m.group(1)) if m else word))
+                return Plan("pc", [_call("set_brightness", percent=value)], _report(f"Brilho da tela em {value} por cento."))
+        if "take_screenshot" in tools and re.search(r"\b(print|printscreen|captura (de |da )?tela|foto da tela)\b", t):
+            return Plan("pc", [_call("take_screenshot")], lambda o, title: o[0].summary if o[0].executed else f"Não consegui: {o[0].summary}")
+        if "find_files" in tools:
+            m = re.search(r"\b(?:procur\w*|busc\w*|ach\w*|encontr\w*)\b (?:o |a |os |as |pelo |pela )?(?:arquivo|arquivos|documento|planilha|foto|pdf)s? (?:chamad[oa] |de nome |com o nome )?(.+)$", t)
+            if m:
+                return Plan("pc", [_call("find_files", query=m.group(1).strip()[:80])], lambda o, title: o[0].summary)
+        if "recycle_file" in tools:
+            m = re.search(r"\b(\d{1,2}|" + "|".join(self.ORDINALS) + r")\b.*\blixeira\b", t)
+            if m:
+                idx = int(m.group(1)) if m.group(1).isdigit() else self.ORDINALS[m.group(1)]
+                return Plan("pc", [_call("recycle_file", index=idx)], _report("Arquivo enviado para a Lixeira."))
+        if "open_file" in tools:
+            m = re.search(r"\b(abr\w*|mostr\w*|apag\w*|exclu\w*|lixeira)\b (?:o |a )?(?:arquivo )?(?:numero )?(\d{1,2}|" + "|".join(self.ORDINALS) + r")\b", t)
+            if m:
+                idx = int(m.group(2)) if m.group(2).isdigit() else self.ORDINALS[m.group(2)]
+                verb = m.group(1)
+                if verb.startswith(("apag", "exclu", "lixeira")):
+                    return Plan("pc", [_call("recycle_file", index=idx)], _report("Arquivo enviado para a Lixeira."))
+                if verb.startswith("mostr"):
+                    return Plan("pc", [_call("show_file", index=idx)], _report("Mostrando na pasta."))
+                return Plan("pc", [_call("open_file", index=idx)], _report("Abrindo o arquivo."))
+        if "open_website" in tools:
+            m = re.search(r"\b([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com\.br|gov\.br|org\.br|com|org|net|br|io|dev|tv|app|me|gg))(/\S*)?\b", t)
+            if m and re.search(r"\b(abr\w*|entr\w*|acess\w*|vai|ir|site)\b", t):
+                return Plan("pc", [_call("open_website", url=m.group(0))], _report(f"Abrindo {m.group(1)}."))
+        if "web_search" in tools:
+            m = re.search(r"\b(?:pesquis\w*|procur\w*|busc\w*|googl\w*|toc\w*|coloc\w*)\b (?:por |sobre )?(.+?) (?:no|na) (google|youtube|maps|mapa|wikipedia)\b", t)
+            if m:
+                site = {"mapa": "maps"}.get(m.group(2), m.group(2))
+                return Plan("pc", [_call("web_search", query=m.group(1)[:300], site=site)], _report("Pesquisando, {title}."))
+            m = re.search(r"^(?:pesquis\w*|googl\w*)\s+(?:por |sobre )?(.+)$", t)
+            if m:
+                return Plan("pc", [_call("web_search", query=m.group(1)[:300], site="google")], _report("Pesquisando no Google, {title}."))
+        if "open_settings" in tools:
+            m = re.search(r"\b(?:configurac\w*|ajustes|opcoes)\b (?:de |do |da |dos |das )?([a-z ]+?)$", t)
+            if m and fold(m.group(1)) in SETTINGS_PAGES:
+                return Plan("pc", [_call("open_settings", page=fold(m.group(1)))], _report(f"Configurações de {m.group(1)} abertas."))
+        if "kill_process" in tools:
+            m = re.search(r"\b(?:forc\w* (?:o )?fechamento d[oa]|mata\w* (?:o )?(?:processo )?|encerr\w* a forca (?:o |a )?)(.+)$", t)
+            if m:
+                return Plan("pc", [_call("kill_process", name=m.group(1).strip()[:60])], _report("Encerrado."))
+        if "close_app" in tools and not re.search(r"\bjanela\b", t):
+            m = re.search(r"\b(?:fech\w*|encerr\w*|sai\w* do|sai\w* da)\s+(?:o |a |os |as )?(?:programa |aplicativo |app )?(.+)$", t)
+            if m and not re.search(r"\b(tudo|todas|luz|luzes|leds?|fita|porta|persiana)\b", m.group(1)):
+                return Plan("pc", [_call("close_app", name=m.group(1).strip()[:60])], _report("Pedido de fechamento enviado."))
+        if "type_text" in tools:
+            m = re.search(r"^digit\w*:?\s+(.+)$", t)
+            if m:
+                return Plan("pc", [_call("type_text", text=m.group(1)[:500])], _report("Digitado."))
+        if "press_keys" in tools:
+            for words, combo in sorted(self.KEY_WORDS.items(), key=lambda kv: -len(kv[0])):
+                if re.fullmatch(rf"{words}( isso| tudo| o arquivo| a pagina)?", t):
+                    return Plan("pc", [_call("press_keys", keys=combo)], _report("Feito."))
+            m = re.search(r"\b(?:aperta|aperte|pressiona|pressione|tecla)\s+(.+)$", t)
+            if m:
+                return Plan("pc", [_call("press_keys", keys=m.group(1).replace(" mais ", "+").replace(" e ", "+")[:30])], _report("Atalho enviado."))
         return None
 
     # ------------------------------------------------------------------ respostas faladas

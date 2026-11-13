@@ -114,6 +114,8 @@ class Settings:
     face_antispoof_min: float = 0.0   # 0 = só registra a nota anti-foto; calibre no seu PC antes de ligar
     # --- Mapa real (OpenStreetMap) ---
     map_radius_m: int = 1800
+    # --- Luzes de casa (Smart Life / Tuya, rede local) ---
+    tuya_devices: Path | None = None   # padrão: backend/data/tuya/devices.json
     overpass_url: str = "https://overpass-api.de/api/interpreter"
     allow_lan: bool = False  # acesso pela rede só com autorização explícita e token forte
     permissions_path: Path = BACKEND_DIR / "config" / "permissions.json"
@@ -209,6 +211,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         face_liveness=(os.getenv("JARVIS_FACE_LIVENESS") or "piscar").strip().lower(),
         face_relock_min=_float("JARVIS_FACE_RELOCK_MIN", 2.0),
         face_antispoof_min=_float("JARVIS_FACE_ANTISPOOF_MIN", 0.0),
+        tuya_devices=Path(os.getenv("JARVIS_TUYA_DEVICES")) if os.getenv("JARVIS_TUYA_DEVICES") else None,
         map_radius_m=max(500, min(4000, _int("JARVIS_MAP_RADIUS_M", 1800) or 1800)),
         overpass_url=(os.getenv("JARVIS_OVERPASS_URL") or "https://overpass-api.de/api/interpreter").strip(),
         devices_simulators=_bool("JARVIS_DEVICE_SIMULATORS", True),
