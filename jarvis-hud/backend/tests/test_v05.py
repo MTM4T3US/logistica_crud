@@ -860,3 +860,13 @@ async def test_lock_events_become_hud_alerts(firmware_bins, settings, perms):
         assert await core.check_lock() == []                                   # não repete o mesmo alerta
     finally:
         fw.close()
+
+
+@pytest.mark.parametrize("text,tool", [
+    ("brilho em 30%", "set_lights"),                      # correção do teste no Windows: brilho sozinho = luzes
+    ("brilho da tela em 60", "set_brightness"),
+    ("brilho do notebook em 60", "set_brightness"),       # 0.5: tela do notebook, não os LEDs
+])
+def test_brightness_goes_to_the_right_place_after_the_windows_merge(text, tool):
+    plan = LocalRouter(Permissions(), lambda: {"set_lights", "set_brightness"}).match(text)
+    assert plan is not None and plan.calls[0].name == tool

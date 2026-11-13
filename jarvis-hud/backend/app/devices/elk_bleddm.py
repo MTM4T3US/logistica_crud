@@ -30,6 +30,7 @@ SETTLE_S = 0.3
 #: espera depois de conectar, antes do primeiro comando (como nos scripts que funcionaram)
 CONNECT_SETTLE_S = 0.5
 CONNECT_ATTEMPTS = (0.0, 1.5, 4.0)       # esperas antes de cada tentativa (reconexão controlada)
+CONNECT_BUDGET_S = 25.0                  # prazo total para conectar (todas as tentativas juntas)
 IDLE_DISCONNECT_S = 300.0                # solta a fita depois de 5 min parada (o app do celular volta a funcionar)
 
 
@@ -101,7 +102,15 @@ class _BleLoop:  # pragma: no cover — exige adaptador Bluetooth
 class BleakTransport(BleTransport):  # pragma: no cover — exige adaptador Bluetooth
     def __init__(self) -> None:
         self._client: Any = None
-        self._ble = _BleLoop.shared()
+        self._loop: _BleLoop | None = None
+
+    @property
+    def _ble(self) -> _BleLoop:
+        # criado só no 1º uso: uma falha do Windows ao abrir o loop (visto uma vez: WinError 10013 em
+        # socket.socketpair) vira erro da fita, em vez de derrubar o núcleo na inicialização
+        if self._loop is None:
+            self._loop = _BleLoop.shared()
+        return self._loop
 
     async def scan(self, name_prefix: str, timeout: float) -> list[dict[str, Any]]:
         async def go() -> list[dict[str, Any]]:
@@ -203,29 +212,46 @@ class ElkBleddmLeds(Device):
                 self.link, self.last_error = "falha", f"Nenhuma fita “{self.name_prefix}” encontrada por perto. Ela está ligada e fora do app do celular?"
                 return self.last_error
             self.address = found[0]["address"]
-        last = ""
+        # prazo TOTAL para conectar: sem ele, com a fita fora da tomada, cada tentativa do bleak levava
+        # ~25 s e o comando só falhava depois de 82 s (medido no Windows)
+        deadline = self._clock() + CONNECT_BUDGET_S
+        last, not_found, tries = "", False, 0
         for wait in CONNECT_ATTEMPTS:
             if wait:
-                await self._sleep(wait)
+                await self._sleep(min(wait, max(0.0, deadline - self._clock())))
+            left = deadline - self._clock()
+            if left < 1.0:
+                break
             self.link = "conectando"
+            tries += 1
             try:
-                await self.t.connect(self.address, self._on_disconnect)
+                await asyncio.wait_for(self.t.connect(self.address, self._on_disconnect), timeout=left)
                 self.link, self.last_error = "conectado", None
                 await self._sleep(CONNECT_SETTLE_S)
                 return None
+            except asyncio.TimeoutError as exc:
+                if deadline - self._clock() < 1.0:   # acabou o prazo total
+                    last = f"sem resposta em {CONNECT_BUDGET_S:.0f} s"
+                    break
+                last = f"{type(exc).__name__}: {exc}"   # só esta tentativa expirou: tenta de novo
             except Exception as exc:
+                not_found = not_found or "NotFound" in type(exc).__name__
                 last = f"{type(exc).__name__}: {exc}"
         self.link = "falha"
-        self.last_error = f"Não consegui conectar à fita {self.address} depois de {len(CONNECT_ATTEMPTS)} tentativas ({last})."
+        if not_found or last.startswith("sem resposta"):
+            why = last if last.startswith("sem resposta") else "não foi encontrada pelo Bluetooth"
+            self.last_error = f"A fita de LED não respondeu ({why}). Ela está na tomada, por perto e desconectada do app do celular?"
+        else:
+            self.last_error = f"Não consegui conectar à fita {self.address} depois de {tries} {'tentativa' if tries == 1 else 'tentativas'} ({last})."
         return self.last_error
 
-    async def _send(self, packets: list[bytes]) -> str | None:
+    async def _send(self, packets: list[bytes], settle: float = SETTLE_S) -> str | None:
         err = await self._ensure()
         if err:
             return err
         try:
             for data in packets:
-                gap = SETTLE_S - (self._clock() - self._last_write)
+                gap = settle - (self._clock() - self._last_write)
                 if gap > 0:
                     await self._sleep(gap)
                 await self.t.write(data)
@@ -252,6 +278,38 @@ class ElkBleddmLeds(Device):
             async with self._lock:
                 await self.t.disconnect()
                 self.link = "desconectado"
+
+    # ------------------------------------------------------------------ efeitos (voz, abertura)
+    async def effect_frame(self, rgb: tuple[int, int, int], power: bool = False, settle: float = SETTLE_S) -> bool:
+        """Um quadro de efeito. Nunca entra na fila: se a fita estiver ocupada (comando do usuário em
+        andamento) ou desconectada, o quadro é descartado — o efeito não atrasa comando nenhum.
+        Não altera `sent` (o estado escolhido pelo usuário)."""
+        if self._lock.locked() or not self.t.connected:
+            return False
+        async with self._lock:
+            packets = ([cmd_power(True)] if power else []) + [cmd_color(*rgb)]
+            return await self._send(packets, settle) is None
+
+    def chosen(self) -> tuple[bool, tuple[int, int, int], int] | None:
+        """Último estado pedido pelo usuário (ligada?, cor base, brilho) — None se nada foi pedido."""
+        if self.sent.get("on") is None:
+            return None
+        return bool(self.sent["on"]), self._base, self._level
+
+    async def restore(self, default: tuple[tuple[int, int, int], int]) -> bool:
+        """Volta ao estado escolhido pelo usuário depois de um efeito (ou ao `default`, cor+brilho,
+        se ele nunca escolheu nada). Espera a fila: este comando não pode se perder."""
+        state = self.chosen()
+        async with self._lock:
+            if state is not None and not state[0]:
+                return await self._send([cmd_power(False)]) is None
+            rgb, level = (state[1], state[2]) if state is not None else default
+            return await self._send([cmd_color(*scale(rgb, level))]) is None
+
+    def adopt(self, rgb: tuple[int, int, int], level: int) -> None:
+        """Registra uma cor como escolhida (ex.: o efeito de abertura termina no Azul JARVIS)."""
+        self._base, self._level = rgb, max(0, min(100, int(level)))
+        self.sent.update(on=True, color=to_hex(rgb), brightness=self._level, at=time.time())
 
     # ------------------------------------------------------------------ comandos
     async def command(self, action: str, params: dict[str, Any]) -> DeviceResult:  # type: ignore[override]

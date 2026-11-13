@@ -115,7 +115,24 @@ def main() -> int:
         try:
             from bleak import BleakScanner
 
-            found = asyncio.run(BleakScanner.discover(timeout=10.0, return_adv=True))
+            # numa thread nova: a seção SAPI acima (pyttsx3/pythoncom) deixa esta thread em STA e o
+            # bleak no Windows falha com "Thread is configured for Windows GUI…" (mesmo motivo do _BleLoop)
+            import threading
+
+            box: dict = {}
+
+            def scan() -> None:
+                try:
+                    box["found"] = asyncio.run(BleakScanner.discover(timeout=10.0, return_adv=True))
+                except Exception as exc:  # repassado para a thread principal
+                    box["error"] = exc
+
+            worker = threading.Thread(target=scan, name="diagnostico-ble")
+            worker.start()
+            worker.join()
+            if "error" in box:
+                raise box["error"]
+            found = box["found"]
             rows = sorted(((d.address, d.name or a.local_name or "", a.rssi) for d, a in found.values()), key=lambda r: -r[2])
             for addr, name, rssi in rows[:25]:
                 tag = "  ← ELK-BLEDDM" if name.upper().startswith("ELK-BLE") else ""

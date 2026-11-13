@@ -81,3 +81,16 @@ no Render, sem sensores, fora do Wi-Fi.
   ele pelo cliente real do JARVIS.
 - **Documentação:** [`FECHADURA.md`](FECHADURA.md) explica ligações (diodo 1N4007 no solenoide, MOSFET
   ou relé), recomenda o sensor reed e tem observações sobre o painel público no Render.
+
+## Atualização 0.5.2 — correções do teste no Windows incorporadas
+
+O patch exportado pelo chat do Windows (23 arquivos, sem segredos nem dados pessoais) foi aplicado
+exatamente sobre a 0.4, de onde saiu: 195 testes passaram, como no PC do usuário. Depois foi juntado com a
+0.5.1. Os dois únicos conflitos eram inserções lado a lado:
+- no `startup()`: lembretes e fechadura + efeito de luz de abertura;
+- nos testes: dois testes novos.
+
+Na revisão manual apareceu um conflito de sentido, já corrigido: depois da correção do Windows ("brilho em
+30%" vai para as luzes), "brilho do notebook em 60" iria para os LEDs. Agora vai para a tela.
+
+**Resultado:** 272 testes do núcleo e o teste de navegador com 14 de 14.

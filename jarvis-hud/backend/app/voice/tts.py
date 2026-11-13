@@ -470,6 +470,15 @@ class VoiceOutput:
                     return self.engines[key]
         return None
 
+    def resolve_offline(self) -> TTSEngine | None:
+        """Primeiro motor LOCAL disponível na ordem (Piper → voz do sistema). Usado nas respostas
+        de comandos do roteador no modo automático, para não gastar a cota do Gemini TTS."""
+        for key in self.ORDER:
+            engine = self.engines.get(key)
+            if engine and not engine.cloud and engine.available()[0]:
+                return engine
+        return None
+
     def fallback_for(self, engine: TTSEngine, preference: str) -> TTSEngine | None:
         """No modo automático, se um motor falhar, a fala continua pelo próximo da ordem."""
         if preference != "auto" or engine.id not in self.ORDER:

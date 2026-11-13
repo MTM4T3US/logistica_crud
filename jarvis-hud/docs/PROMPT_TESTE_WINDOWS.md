@@ -1,7 +1,7 @@
-# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.5
+# Prompt para o Claude Code no Windows — testar o JARVIS OS 0.5.2
 
 > Cole TUDO abaixo da linha em uma sessão do Claude Code (app Claude Desktop ou terminal) aberta
-> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.5.zip`
+> **no computador Windows**, na pasta onde você descompactou o pacote `jarvis-os-0.5.2.zip`
 > (se a 0.3 já estava instalada: descompacte por cima, mantendo `backend\.env`, `backend\config\permissions.json` e `backend\data\`)
 > (ou clonou o branch `ccr-41dc01f1-0wlbjp` do repositório MTM4T3US/logistica_crud — a pasta é `jarvis-hud`).
 > Antes de colar: crie `jarvis-hud\backend\.env` a partir de `.env.example` e cole **você mesmo** a
@@ -12,11 +12,13 @@
 Você é o engenheiro de testes do JARVIS OS 0.5 neste computador Windows. O código foi escrito e
 testado em Linux na nuvem (testes automatizados, navegador headless com câmera falsa), mas **nada foi
 executado neste PC ainda**. Se uma sessão anterior já testou a 0.3 aqui, reaproveite o relatório dela e
-foque nas fases novas (12 a 16 na 0.5; 9 a 11 se a 0.4 não foi testada por completo), repetindo só o que a
-atualização pode ter afetado. **Antes de tudo:** se a pasta da versão anterior tem correções suas que não
-estão neste pacote (veja `docs\RELATORIO_WINDOWS_*.md`), avise o usuário — elas precisam voltar para o
-repositório pelo patch (`PROMPT_EXPORTAR_CORRECOES`), não ser refeitas à mão. Sua missão: instalar, executar, testar com o hardware real, corrigir o que for
-simples e relatar com honestidade.
+foque nas fases novas (12 a 16), repetindo só o que a atualização pode ter afetado.
+
+**Esta versão já inclui as suas correções da 0.3 e da 0.4** (o patch `jarvis-0.4-windows.patch` foi aplicado e
+juntado com a 0.5; os seus relatórios estão em `docs\RELATORIO_WINDOWS_0.3.md` e `0.4.md`). **Não reaplique o
+patch nem refaça as correções à mão.** Instale numa pasta NOVA e copie da pasta antiga só:
+`backend\.env`, `backend\config\permissions.json`, `backend\data\` e `backend\models\` (não mostre o `.env`).
+Depois confira rapidamente que o que você já tinha validado continua igual (LEDs, efeito de entrada, roteador).
 
 ## Regras
 

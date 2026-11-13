@@ -5,6 +5,7 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import re
 import time
 import uuid
 from datetime import datetime
@@ -46,9 +47,19 @@ from .voice.audio_stream import SentenceChunker, normalize_for_speech, speakable
 from .voice.stt import GeminiSTT, STTError, VoiceInput, WhisperSTT, extract_wake_command
 from .voice.wake import WakeDetector, make_wake_detector
 from .router import LocalRouter
+
+#: frases de quem diz que EXECUTOU algo (aparelho, volume, janela, app) — só valem com ferramenta
+_ACTION_CLAIM = re.compile(
+    r"\b(comando (foi )?enviado|enviad[oa]s? (as|às) luzes|luzes (ligadas|desligadas|acesas|apagadas)|"
+    r"volume (ajustado|em \d+)|brilho (ajustado|em \d+)|(aberto|aberta|fechad[oa]|minimizad[oa]|maximizad[oa]), senhor|"
+    r"rotina .{0,40} executada|mudo ativado)\b", re.IGNORECASE)
+
+
+def claims_action(text: str) -> bool:
+    return bool(_ACTION_CLAIM.search(text or ""))
 from .voice.tts import STYLES, GeminiTTS, LocalTTS, PiperTTS, TTSEngine, TTSError, TTSResult, VoiceOutput
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 MAX_TOOL_ROUNDS = 6
 CONFIRM_TIMEOUT_S = 45.0
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -170,6 +181,19 @@ class Assistant:
         self.local = LocalProvider(self.router)
         self.last_ai_error: dict[str, str] | None = None
         self.last_timings: dict[str, float] | None = None
+        self.led_fx = self._make_led_effects(settings)
+        self._intro_task: asyncio.Task | None = None
+
+    def _make_led_effects(self, settings: Settings):
+        """Efeitos de luz só na fita REAL (JARVIS_LEDS=bluetooth); o simulador não pisca nada."""
+        from .devices.elk_bleddm import ElkBleddmLeds
+        from .devices.led_effects import VoiceLights, parse_effects
+
+        dev = self.devices.get("leds")
+        wanted = parse_effects(settings.led_effects)
+        if not isinstance(dev, ElkBleddmLeds) or not wanted:
+            return None
+        return VoiceLights(dev, voice="voz" in wanted, intro="inicio" in wanted)
 
     def _computer_agent(self) -> ComputerAgent | None:
         if self.gemini is None or self.screen is None:
@@ -204,13 +228,17 @@ class Assistant:
         return DeviceRegistry(simulators=settings.devices_simulators, leds_off=settings.leds_mode == "off")
 
     async def shutdown(self) -> None:
-        if self._reminders:
-            self._reminders.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._reminders
+        for task in (self._reminders, self._intro_task):
+            if task and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
 
     async def startup(self) -> None:
         self._reminders = asyncio.create_task(self._reminder_loop())
+        if self.led_fx is not None and self.led_fx.intro_enabled and not self.gate.active:
+            # sem entrada por rosto: o efeito de abertura roda ao iniciar. Com ela, roda ao entrar (on_entry)
+            self._intro_task = asyncio.create_task(self.led_fx.intro())   # em segundo plano: não atrasa o núcleo
         if self.gemini:
             await self.gemini.resolve_models()
             self._apply_models(self.runtime())
@@ -325,9 +353,16 @@ class Assistant:
         await conn.send({"type": "phase", "phase": "thinking", "turn": turn})
 
         rt = self.runtime()
+        # o roteador decide ANTES da voz começar: resposta de comando local (no modo automático)
+        # sai por uma voz local e não gasta pedidos do Gemini TTS
+        plan = None
+        if not text.strip():
+            plan = Plan("ack", render=lambda _o, title: f"Pois não, {title}?")   # disse só "Jarvis"
+        elif rt.get("router_mode", "local_first") == "local_first":
+            plan = self.router.match(text)
         speak = bool(rt["speak"]) and self.tts.resolve(rt["tts_engine"]) is not None
         queue: asyncio.Queue[str | None] = asyncio.Queue()
-        speaker = asyncio.create_task(self._speak_worker(conn, turn, queue, rt, marks)) if speak else None
+        speaker = asyncio.create_task(self._speak_worker(conn, turn, queue, rt, marks, prefer_local=plan is not None)) if speak else None
         chunker = SentenceChunker()
         # modo econômico (padrão): a 1ª frase é sintetizada na hora e TODO o restante vira um
         # único pedido de voz ao final — no máximo 2 requisições por resposta, por causa das cotas
@@ -399,11 +434,6 @@ class Assistant:
             await say(plan.render(outcomes, rt["user_title"]))
 
         try:
-            plan = None
-            if not text.strip():
-                plan = Plan("ack", render=lambda _o, title: f"Pois não, {title}?")   # disse só "Jarvis"
-            elif rt.get("router_mode", "local_first") == "local_first":
-                plan = self.router.match(text)
             chain: list[tuple[AIProvider, str]] = [] if plan is not None else ([(self.gemini, "ai")] if self.gemini else []) + [(self.local, "local")]
             if plan is not None:
                 await route_local(plan)
@@ -426,6 +456,10 @@ class Assistant:
                                          "unavailable": "Gemini sobrecarregado", "auth": "chave do Gemini recusada"}.get(err.code, f"Gemini indisponível: {err.code}")
                     self.local.title = rt["user_title"]
                     await conn.send({"type": "notice", "message": "Continuando em modo local, sem IA."})
+            if used["mode"] == "ai" and not tool_log and claims_action("".join(said)):
+                # a IA afirmou ter feito algo sem chamar ferramenta (visto no Windows: "Brilho em 30 por
+                # cento: comando enviado." sem nenhuma ação). O prompt proíbe; aqui o HUD avisa a verdade.
+                await conn.send({"type": "notice", "message": "Atenção: a IA disse que fez algo, mas nenhuma ação foi executada. Repita o pedido de outro jeito."})
             for sentence in chunker.flush():
                 queue_speech(sentence)
             if held:
@@ -460,13 +494,17 @@ class Assistant:
                     "ai": self.ai_status(), "timings": timings,
                 }))
 
-    async def _speak_worker(self, conn: Connection, turn: str, queue: "asyncio.Queue[str | None]", rt: dict[str, Any], marks: dict[str, float] | None = None) -> None:
+    async def _speak_worker(self, conn: Connection, turn: str, queue: "asyncio.Queue[str | None]", rt: dict[str, Any], marks: dict[str, float] | None = None,
+                            prefer_local: bool = False) -> None:
         """Sintetiza as frases em paralelo (até `tts_parallel`) e entrega ao HUD na ordem.
 
         Motores com streaming (Gemini) mandam o áudio em pedaços assim que chegam:
         `audio_start` → `audio_chunk`… → `audio_end`. Os demais mandam um WAV inteiro (`audio`).
         Se a nuvem falhar antes do 1º pedaço, a frase sai pela voz local (modo automático)."""
-        state: dict[str, Any] = {"engine": self.tts.resolve(rt["tts_engine"]), "failed": False, "switch": None}
+        engine0 = self.tts.resolve(rt["tts_engine"])
+        if prefer_local and rt["tts_engine"] == "auto":
+            engine0 = self.tts.resolve_offline() or engine0   # comando local: voz local, sem cota
+        state: dict[str, Any] = {"engine": engine0, "failed": False, "switch": None}
         limit = asyncio.Semaphore(max(1, self.settings.tts_parallel))
         ordered: asyncio.Queue[tuple[str, asyncio.Queue] | None] = asyncio.Queue()
         tasks: list[asyncio.Task] = []
@@ -531,6 +569,10 @@ class Assistant:
 
         producer = asyncio.create_task(produce())
         seq = 0
+        fx = self.led_fx if self.led_fx is not None and self.led_fx.voice else None
+        if fx:
+            fx.begin()
+        interrupted = False
         try:
             while True:
                 item = await ordered.get()
@@ -552,11 +594,15 @@ class Assistant:
                     elif kind == "chunk" and live is not None:
                         first_audio()
                         live["bytes"] += len(value)
+                        if fx:
+                            fx.feed_pcm(value, live["rate"])
                         await conn.send({"type": "audio_chunk", "turn": turn, "seq": seq, "pcm": base64.b64encode(value).decode("ascii")})
                     elif kind == "cut":
                         await conn.send({"type": "error", "scope": "tts", "code": value.code, "message": value.message})
                     elif kind == "wav":
                         first_audio()
+                        if fx:
+                            fx.feed_wav(value.wav)
                         await conn.send({
                             "type": "audio", "turn": turn, "seq": seq, "text": sentence, "duration": round(value.duration_s, 3),
                             "engine": value.engine, "voice": value.voice, "model": value.model, "cloud": value.cloud, "wav": base64.b64encode(value.wav).decode("ascii"),
@@ -568,7 +614,12 @@ class Assistant:
                 if live is not None:
                     await conn.send({"type": "audio_end", "turn": turn, "seq": seq, "duration": round(live["bytes"] / 2 / live["rate"], 3)})
                     seq += 1
+        except asyncio.CancelledError:
+            interrupted = True
+            raise
         finally:
+            if fx:
+                fx.end(interrupted=interrupted)
             producer.cancel()
             for task in tasks:
                 task.cancel()
@@ -702,6 +753,11 @@ class Assistant:
             await self._speak_worker(conn, turn, queue, rt)
         await conn.send({"type": "turn_end", "turn": turn, "text": text, "provider": "roteador", "model": "texto local", "mode": mode,
                          "spoken": speak, "interrupted": False, "error": None, "ai": self.ai_status(), "timings": {}})
+
+    def on_entry(self) -> None:
+        """Rosto ou PIN aceito: a fita faz a apresentação de entrada junto com a música."""
+        if self.led_fx is not None:
+            self.led_fx.start_entry()
 
     async def intro(self, conn: Connection) -> None:
         """Depois do rosto confirmado: boas-vindas e, já sobre a cidade, clima e notícias."""

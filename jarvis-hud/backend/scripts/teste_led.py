@@ -117,7 +117,9 @@ def main() -> int:
     try:
         import bleak
 
-        out(f"bleak {getattr(bleak, '__version__', '?')}")
+        from importlib.metadata import version
+
+        out(f"bleak {getattr(bleak, '__version__', None) or version('bleak')}")
     except ImportError:
         out("bleak não instalado: rode INSTALAR_RECURSOS_LOCAIS.bat (ou pip install bleak).")
         return 4

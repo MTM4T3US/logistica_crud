@@ -218,3 +218,23 @@ def test_robot_emergency_stop_and_watchdog():
     robot.command("reset_emergency", {})
     assert robot.command("move", {"direction": "sideways"}).executed is False
     assert robot.command("move", {"direction": "forward"}).executed is True
+
+
+def test_empty_env_values_fall_back_to_defaults(tmp_path, monkeypatch):
+    """O .env.example traz `JARVIS_MODELS_DIR=` vazio. No Windows isso virava Path("") = pasta atual
+    e o núcleo não achava a voz Piper nem o Whisper em backend/models."""
+    for name in ("JARVIS_MODELS_DIR", "JARVIS_HOST", "JARVIS_DB_PATH", "JARVIS_PERMISSIONS_FILE", "JARVIS_WHISPER_MODEL"):
+        monkeypatch.setenv(name, "")
+    s = load_settings(tmp_path / "ausente.env")
+    assert s.models_dir == BACKEND_DIR / "models"
+    assert s.host == "127.0.0.1" and s.whisper_model == "small"
+    assert s.db_path == BACKEND_DIR / "data" / "jarvis.sqlite3"
+    assert s.permissions_path == BACKEND_DIR / "config" / "permissions.json"
+
+
+def test_permissions_file_saved_with_bom_still_loads(tmp_path):
+    """Visto no Windows: permissions.json salvo pelo PowerShell 5.1 (UTF-8 com BOM) derrubava o núcleo."""
+    src = (BACKEND_DIR / "config" / "permissions.example.json").read_text(encoding="utf-8")
+    path = tmp_path / "permissions.json"
+    path.write_bytes(b"\xef\xbb\xbf" + src.encode("utf-8"))
+    assert Permissions.load(path).apps

@@ -380,6 +380,33 @@ def test_whisper_tries_gpu_then_falls_back_to_cpu():
     assert res.text == "Jarvis, que horas são?" and tried == [("cuda", "float16"), ("cpu", "int8")] and w.loaded_on == "cpu/int8"
 
 
+def test_whisper_falls_back_to_cpu_when_gpu_loads_but_transcription_fails():
+    """Visto no Windows (RTX 2050 sem CUDA Toolkit): o modelo carrega na GPU e só a transcrição
+    falha com "cublas64_12.dll is not found". Deve recarregar na CPU e responder."""
+    tried = []
+
+    class FakeSeg:
+        text = " volume vinte "
+
+    class GpuModel:
+        def transcribe(self, audio, **kw):
+            raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+
+    class CpuModel:
+        def transcribe(self, audio, **kw):
+            assert getattr(audio, "dtype", None) is not None   # WAV decodificado aqui, sem PyAV
+            return [FakeSeg()], None
+
+    def factory(size, device, compute):
+        tried.append(device)
+        return GpuModel() if device == "cuda" else CpuModel()
+
+    w = WhisperSTT("small", device="auto", factory=factory)
+    assert asyncio.run(w.transcribe(tone_wav())).text == "volume vinte"
+    assert asyncio.run(w.transcribe(tone_wav())).text == "volume vinte"
+    assert tried == ["cuda", "cpu"] and w.loaded_on == "cpu/int8"
+
+
 SAMPLE = BACKEND_DIR / "samples" / "frase-de-ativacao.wav"
 
 
@@ -433,3 +460,55 @@ async def test_router_reply_never_presents_a_simulator_as_real(router):
     sim = ToolOutcome(plan.calls[0], True, True, "ok", simulated=True)
     real = ToolOutcome(plan.calls[0], True, True, "ok", simulated=False)
     assert "simulador" in plan.render([sim], "senhor") and "simulador" not in plan.render([real], "senhor")
+
+
+def test_router_never_says_done_when_a_routine_only_partly_ran():
+    """Visto no Windows: "ativar modo cinema" com a fita fora de alcance → 1 de 2 etapas, e o JARVIS
+    dizia "Rotina executada". Tem de dizer que foi só em parte e qual etapa falhou."""
+    from app.ai.base import ToolCall, ToolOutcome
+    from app.router import _report
+
+    steps = [{"tool": "set_lights", "executed": False, "message": "Não consegui conectar à fita."},
+             {"tool": "set_volume", "executed": True, "message": "Volume em 35%."}]
+    out = ToolOutcome(ToolCall("1", "run_routine", {"routine_id": "cinema"}), False, True, "Rotina Modo cinema: 1 de 2 etapas executadas.", data={"steps": steps})
+    text = _report("Rotina “Modo cinema” executada, {title}.")([out], "senhor")
+    assert "executada, senhor" not in text and "1 de 2" in text and "Não consegui conectar à fita." in text
+
+
+def test_router_handles_brightness_alone_as_lights(perms):
+    """Visto no Windows: "brilho em 30%" ia para o Gemini, que disse "comando enviado" sem ferramenta."""
+    from app.router import LocalRouter
+
+    r = LocalRouter(perms, lambda: {"set_lights"}, "jarvis")
+    for text in ("brilho em 30%", "Jarvis, brilho 30", "coloque o brilho em trinta"):
+        plan = r.match(text)
+        assert plan is not None and plan.calls[0].args == {"brightness": 30}, text
+    assert r.match("aumenta o brilho da tela") is None
+
+
+async def test_leds_unplugged_strip_fails_within_the_connect_budget(monkeypatch):
+    """Medido no Windows com a fita fora da tomada: 82 s até falhar. Agora há um prazo total
+    (CONNECT_BUDGET_S = 25 s; aqui reduzido para o teste) e a mensagem é em português claro."""
+    import time
+
+    from app.devices import elk_bleddm
+
+    monkeypatch.setattr(elk_bleddm, "CONNECT_BUDGET_S", 1.5)
+
+    class HangingBle(FakeBle):            # o bleak procurando um aparelho que não está lá
+        async def connect(self, address, on_disconnect):
+            self.connects += 1
+            await asyncio.sleep(60)
+
+    class GoneBle(FakeBle):
+        async def connect(self, address, on_disconnect):
+            self.connects += 1
+            await asyncio.sleep(0.4)
+            raise type("BleakDeviceNotFoundError", (Exception,), {})("Device with address AA:BB was not found.")
+
+    for ble in (HangingBle(), GoneBle()):
+        dev = ElkBleddmLeds("AA:BB", transport=ble)
+        t0 = time.monotonic()
+        res = await dev.command("color", {"color": "#0000ff"})
+        assert res.executed is False and time.monotonic() - t0 < 2.0, type(ble).__name__
+        assert "não respondeu" in res.message and "tomada" in res.message and "Bleak" not in res.message

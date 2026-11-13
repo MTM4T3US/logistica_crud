@@ -97,7 +97,7 @@ class Permissions:
     def load(cls, path: Path) -> "Permissions":
         if not path.exists():
             return cls(source=f"{path.name} ausente — nenhum app/pasta autorizado")
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))   # aceita BOM (Bloco de Notas antigo, PowerShell 5.1)
         perms = cls(source=str(path.name))
         for item in raw.get("apps", []):
             cmd = tuple(str(c) for c in item.get("command", []))

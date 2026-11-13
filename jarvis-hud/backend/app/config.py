@@ -12,6 +12,12 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_DIR = BACKEND_DIR.parent
 
 
+def _env(name: str, default: str) -> str:
+    """Valor da variável, ou o padrão se ela não existir OU estiver vazia (ex.: `JARVIS_MODELS_DIR=`
+    no .env). Sem isso, `os.getenv(nome, padrão)` devolve "" e caminhos viram a pasta atual."""
+    return (os.getenv(name) or "").strip() or default
+
+
 def _bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -92,6 +98,7 @@ class Settings:
     leds_mode: str = "simulador"      # simulador | bluetooth | off
     led_address: str | None = None
     led_name_prefix: str = "ELK-BLEDDM"
+    led_effects: str = "voz,inicio"  # efeitos na fita real: voz (acompanha a fala), inicio (abertura) ou off
     led_brightness: str = "cor"        # cor (escurece a cor; validado) | comando (7e 04 01; não validado)
     # --- Memória ---
     memory_enabled: bool = False
@@ -151,16 +158,16 @@ def load_settings(env_file: Path | None = None) -> Settings:
     """Lê backend/.env (se existir) e o ambiente. Nunca registra o valor da chave."""
     load_dotenv(env_file or BACKEND_DIR / ".env", override=False)
     loc = Location(
-        city=os.getenv("JARVIS_CITY", "Itumbiara"),
-        state=os.getenv("JARVIS_STATE", "Goiás"),
-        state_code=os.getenv("JARVIS_STATE_CODE", "GO"),
-        country=os.getenv("JARVIS_COUNTRY", "Brasil"),
+        city=_env("JARVIS_CITY", "Itumbiara"),
+        state=_env("JARVIS_STATE", "Goiás"),
+        state_code=_env("JARVIS_STATE_CODE", "GO"),
+        country=_env("JARVIS_COUNTRY", "Brasil"),
         latitude=_float("JARVIS_LATITUDE", -18.4192),
         longitude=_float("JARVIS_LONGITUDE", -49.2153),
-        timezone=os.getenv("JARVIS_TIMEZONE", "America/Sao_Paulo"),
-        language=os.getenv("JARVIS_LANGUAGE", "pt-BR"),
+        timezone=_env("JARVIS_TIMEZONE", "America/Sao_Paulo"),
+        language=_env("JARVIS_LANGUAGE", "pt-BR"),
     )
-    origins = tuple(o.strip() for o in os.getenv("JARVIS_ALLOWED_ORIGINS", "").split(",") if o.strip())
+    origins = tuple(o.strip() for o in _env("JARVIS_ALLOWED_ORIGINS", "").split(",") if o.strip())
     key = (os.getenv("GEMINI_API_KEY") or "").strip() or None
     s = Settings(
         gemini_api_key=key,
@@ -177,31 +184,32 @@ def load_settings(env_file: Path | None = None) -> Settings:
         gemini_first_token_timeout_s=_float("GEMINI_FIRST_TOKEN_TIMEOUT_S", 12.0),
         gemini_auto_model=_bool("GEMINI_AUTO_MODEL", True),
         history_turns=_int("JARVIS_HISTORY_TURNS", 16) or 16,
-        tts_engine=os.getenv("JARVIS_TTS_ENGINE", "auto").strip().lower(),
-        tts_voice=os.getenv("JARVIS_TTS_VOICE", "Charon").strip(),
-        tts_style=os.getenv("JARVIS_TTS_STYLE", "cinematografico").strip().lower(),
+        tts_engine=_env("JARVIS_TTS_ENGINE", "auto").strip().lower(),
+        tts_voice=_env("JARVIS_TTS_VOICE", "Charon").strip(),
+        tts_style=_env("JARVIS_TTS_STYLE", "cinematografico").strip().lower(),
         tts_parallel=max(1, min(_int("JARVIS_TTS_PARALLEL", 3) or 3, 6)),
         tts_chunking=(os.getenv("JARVIS_TTS_CHUNKING") or "economico").strip().lower(),
-        stt_engine=os.getenv("JARVIS_STT_ENGINE", "auto").strip().lower(),
-        whisper_model=os.getenv("JARVIS_WHISPER_MODEL", "small").strip(),
+        stt_engine=_env("JARVIS_STT_ENGINE", "auto").strip().lower(),
+        whisper_model=_env("JARVIS_WHISPER_MODEL", "small").strip(),
         whisper_device=(os.getenv("JARVIS_WHISPER_DEVICE") or "auto").strip().lower(),
         whisper_compute=(os.getenv("JARVIS_WHISPER_COMPUTE") or "int8").strip().lower(),
-        wake_word=os.getenv("JARVIS_WAKE_WORD", "jarvis").strip().lower(),
+        wake_word=_env("JARVIS_WAKE_WORD", "jarvis").strip().lower(),
         wake_engine=(os.getenv("JARVIS_WAKE_ENGINE") or "auto").strip().lower(),
         wake_threshold=_float("JARVIS_WAKE_THRESHOLD", 0.5),
         wake_model=(os.getenv("JARVIS_WAKE_MODEL") or "").strip() or None,
         conversation_window_s=_float("JARVIS_CONVERSATION_WINDOW_S", 8.0),
         piper_model=Path(os.getenv("JARVIS_PIPER_MODEL")) if os.getenv("JARVIS_PIPER_MODEL") else None,
         router_mode=(os.getenv("JARVIS_ROUTER") or "local_first").strip().lower(),
-        models_dir=Path(os.getenv("JARVIS_MODELS_DIR", str(BACKEND_DIR / "models"))),
+        models_dir=Path(_env("JARVIS_MODELS_DIR", str(BACKEND_DIR / "models"))),
         leds_mode=(os.getenv("JARVIS_LEDS") or "simulador").strip().lower(),
         led_address=(os.getenv("JARVIS_LED_ADDRESS") or "").strip() or None,
         led_name_prefix=(os.getenv("JARVIS_LED_NAME_PREFIX") or "ELK-BLEDDM").strip(),
         led_brightness=(os.getenv("JARVIS_LED_BRILHO") or "cor").strip().lower(),
+        led_effects=_env("JARVIS_LED_EFEITOS", "voz,inicio").lower(),
         allow_lan=_bool("JARVIS_ALLOW_LAN", False),
         memory_enabled=_bool("JARVIS_MEMORY_ENABLED", False),
-        db_path=Path(os.getenv("JARVIS_DB_PATH", str(BACKEND_DIR / "data" / "jarvis.sqlite3"))),
-        host=os.getenv("JARVIS_HOST", "127.0.0.1"),
+        db_path=Path(_env("JARVIS_DB_PATH", str(BACKEND_DIR / "data" / "jarvis.sqlite3"))),
+        host=_env("JARVIS_HOST", "127.0.0.1"),
         port=_int("JARVIS_PORT", 8765) or 8765,
         allowed_origins=origins,
         weather_enabled=_bool("JARVIS_WEATHER_ENABLED", True),
@@ -215,7 +223,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         map_radius_m=max(500, min(4000, _int("JARVIS_MAP_RADIUS_M", 1800) or 1800)),
         overpass_url=(os.getenv("JARVIS_OVERPASS_URL") or "https://overpass-api.de/api/interpreter").strip(),
         devices_simulators=_bool("JARVIS_DEVICE_SIMULATORS", True),
-        permissions_path=Path(os.getenv("JARVIS_PERMISSIONS_FILE", str(BACKEND_DIR / "config" / "permissions.json"))),
+        permissions_path=Path(_env("JARVIS_PERMISSIONS_FILE", str(BACKEND_DIR / "config" / "permissions.json"))),
         location=loc,
     )
     token = (os.getenv("JARVIS_LOCAL_TOKEN") or "").strip()

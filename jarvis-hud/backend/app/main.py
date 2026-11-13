@@ -257,6 +257,8 @@ def create_app(settings: Settings | None = None, assistant: Assistant | None = N
                     else:
                         res = await asyncio.to_thread(gate.forget)
                     await conn.send({"type": "face_result", "mode": kind, **res.to_dict()})
+                    if kind in ("face_verify", "pin_verify") and res.ok and gate.open:
+                        core.on_entry()   # luzes: apresentação de entrada, junto com a música
                     await conn.send({"type": "state", "state": await core.state()})
                 elif kind == "lock":
                     await conn.cancel_turn()
